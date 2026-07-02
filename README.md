@@ -52,7 +52,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 ### 便携版（普通用户）
 
-从 [Releases](https://github.com/rbn42/panon/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `Panon.Windows.exe` 即可运行。
+从 [Releases](https://github.com/DevilSmail/Panon.Windows/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `Panon.Windows.exe` 即可运行。
 
 > 无需安装任何运行时——程序已自包含所有依赖。
 
@@ -76,9 +76,8 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 **克隆并编译：**
 
 ```powershell
-git clone https://github.com/rbn42/panon.git
-cd panon
-git checkout windows/winui3-port
+git clone https://github.com/DevilSmail/Panon.Windows.git
+cd Panon.Windows
 cd src\Panon.Windows
 dotnet run --configuration Debug
 ```

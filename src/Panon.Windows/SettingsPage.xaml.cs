@@ -3,7 +3,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.Win32;
 using Panon.Windows.Settings;
-using System.Runtime.InteropServices;
 
 namespace Panon.Windows;
 
@@ -89,10 +88,7 @@ public sealed partial class SettingsPage : Page
         FpsSlider.Value = _settings.Fps;
 
         // 显示
-        if (_settings.Gravity >= 0 && _settings.Gravity < GravityCombo.Items.Count)
-            GravityCombo.SelectedIndex = _settings.Gravity;
-        else
-            GravityCombo.SelectedIndex = 2; // 默认 South
+        SelectComboByTag(GravityCombo, _settings.Gravity.ToString(), 2);
         InversionToggle.IsOn = _settings.Inversion;
 
         // 柱宽和间隙
@@ -108,12 +104,8 @@ public sealed partial class SettingsPage : Page
         UpdateColorSliders();
 
         // Windows
-        // 覆盖模式: SelectedIndex 0=Under(1), 1=Above(2)
-        int savedMode = _settings.OverlayMode;
-        if (savedMode >= 1 && savedMode <= 2)
-            OverlayModeCombo.SelectedIndex = savedMode - 1;
-        else
-            OverlayModeCombo.SelectedIndex = 0; // 默认任务栏覆盖在频谱上面
+        // 覆盖模式: Tag 值 1=Under, 2=Above
+        SelectComboByTag(OverlayModeCombo, _settings.OverlayMode.ToString(), 0);
 
         // 图形效果
         VisualEffectCombo.SelectedIndex = 0; // 默认柱状图
@@ -122,10 +114,7 @@ public sealed partial class SettingsPage : Page
         UpdateBarControlsEnabled();
 
         // 填充模式
-        if (_settings.FillMode >= 0 && _settings.FillMode < FillModeCombo.Items.Count)
-            FillModeCombo.SelectedIndex = _settings.FillMode;
-        else
-            FillModeCombo.SelectedIndex = 1; // 默认仅空白区域
+        SelectComboByTag(FillModeCombo, _settings.FillMode.ToString(), 1);
 
         // 开机自启（以注册表为准，不受 settings.json 影响）
         SyncStartWithWindowsFromRegistry();
@@ -186,11 +175,10 @@ public sealed partial class SettingsPage : Page
 
         _settings.ReduceBass = ReduceBassToggle.IsOn;
         _settings.Inversion = InversionToggle.IsOn;
-        // 防御：SelectedIndex 可能是 -1（ComboBox 未完成初始化或无选中项）
-        _settings.Gravity = GravityCombo.SelectedIndex >= 0 ? GravityCombo.SelectedIndex : _settings.Gravity;
-        _settings.OverlayMode = OverlayModeCombo.SelectedIndex + 1; // SelectedIndex 0→1(Under), 1→2(Above)
+        _settings.Gravity = ReadComboTag(GravityCombo, _settings.Gravity);
+        _settings.OverlayMode = ReadComboTag(OverlayModeCombo, _settings.OverlayMode);
         _settings.VisualEffectName = VisualEffectCombo.SelectedItem is ComboBoxItem item ? (item.Tag as string ?? "bar1ch") : "bar1ch";
-        _settings.FillMode = FillModeCombo.SelectedIndex >= 0 ? FillModeCombo.SelectedIndex : _settings.FillMode;
+        _settings.FillMode = ReadComboTag(FillModeCombo, _settings.FillMode);
 
         // 图形效果切换时更新柱宽/间隙可用性
         UpdateBarControlsEnabled();
@@ -198,7 +186,8 @@ public sealed partial class SettingsPage : Page
 
         // 检测目标显示器是否变化（变化时需要重建 overlay）
         string oldTarget = _settings.TargetMonitor;
-        string newTarget = (TargetMonitorCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "0";
+        string? newTarget = (TargetMonitorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        if (newTarget == null) return; // 列表未初始化，跳过
         _settings.TargetMonitor = newTarget;
 
         // 开机自启：写/删 HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Panon
@@ -221,8 +210,10 @@ public sealed partial class SettingsPage : Page
     {
         if (_isLoading) return;
 
-        _settings.BassResolutionLevel = (int)BassResolutionSlider.Value;
-        _settings.Fps = (int)FpsSlider.Value;
+        if ((Slider)sender == BassResolutionSlider)
+            _settings.BassResolutionLevel = (int)BassResolutionSlider.Value;
+        else if ((Slider)sender == FpsSlider)
+            _settings.Fps = (int)FpsSlider.Value;
 
         UpdateValueDisplays();
         SaveSettings();
@@ -257,7 +248,12 @@ public sealed partial class SettingsPage : Page
         if (_isLoading) return;
 
         var selectedRadio = ColorSpaceRadio.SelectedItem as RadioButton;
-        _settings.ColorSpaceHSLuv = selectedRadio?.Tag as string == "HSLuv";
+        bool newHSLuv = selectedRadio?.Tag as string == "HSLuv";
+
+        // 值未变则跳过（防止 WinUI3 延迟 SelectionChanged 事件在 _isLoading 变为 false 后误触发）
+        if (_settings.ColorSpaceHSLuv == newHSLuv) return;
+
+        _settings.ColorSpaceHSLuv = newHSLuv;
 
         // 屏蔽 OnColorSliderChanged，避免 UpdateColorSliders 触发滑块事件把预设切回"自定义"
         _isLoading = true;
@@ -265,9 +261,8 @@ public sealed partial class SettingsPage : Page
         UpdateValueDisplays();
         _isLoading = false;
 
-        // 切换色彩空间本质上是改变了配色方案（HSL 和 HSLuv 各有独立存储的值），
-        // 直接切到"自定义"，不尝试匹配预设（避免匹配到另一个预设造成混乱）
-        ColorPresetCombo.SelectedIndex = ColorPresets.Length;
+        // 检测切换后是否匹配某个预设（不匹配则自动显示"自定义"）
+        UpdatePresetSelection();
 
         SaveSettings();
         ApplySettingsToEngine();
@@ -317,8 +312,10 @@ public sealed partial class SettingsPage : Page
         double seed5 = random.NextDouble();
 
         // 切换到 HSLuv 色彩空间
+        _isLoading = true;
         _settings.ColorSpaceHSLuv = true;
         ColorSpaceRadio.SelectedIndex = 1;
+        _isLoading = false;
 
         _settings.HsluvHueFrom = (int)(360 * seed1);
         _settings.HsluvHueTo = (int)(1080 * seed2 - 360);
@@ -452,53 +449,26 @@ public sealed partial class SettingsPage : Page
     }
 
     /// <summary>
-    /// 运行时枚举真实显示器，动态填充下拉列表（主显示器 / 各显示器 / 所有显示器）
+    /// 运行时通过 TaskbarHelper 动态填充显示器下拉列表（与 overlay 创建使用相同的索引）
     /// </summary>
     private void PopulateMonitorCombo()
     {
         TargetMonitorCombo.Items.Clear();
 
-        var monitors = new List<(int Index, int Width, int Height, bool IsPrimary)>();
-        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero,
-            (IntPtr hMonitor, IntPtr hdc, ref RECT rc, IntPtr lp) =>
-            {
-                var mi = new MONITORINFOEX();
-                mi.cbSize = Marshal.SizeOf<MONITORINFOEX>();
-                GetMonitorInfo(hMonitor, ref mi);
-                bool isPrimary = (mi.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
-                monitors.Add((monitors.Count, rc.Right - rc.Left, rc.Bottom - rc.Top, isPrimary));
-                return true;
-            }, IntPtr.Zero);
+        var helper = new Panon.Windows.Helpers.TaskbarHelper();
+        var taskbars = helper.GetAllTaskbarInfos();
 
-        // 主显示器排第一
-        var primary = monitors.FirstOrDefault(m => m.IsPrimary);
-        if (primary != default)
+        for (int i = 0; i < taskbars.Count; i++)
         {
-            TargetMonitorCombo.Items.Add(new ComboBoxItem
-            {
-                Content = $"主显示器 - {primary.Width}×{primary.Height} (默认)",
-                Tag = primary.Index.ToString()
-            });
-        }
-        else
-        {
-            TargetMonitorCombo.Items.Add(new ComboBoxItem { Content = "主显示器 (默认)", Tag = "0" });
-        }
-
-        // 其余显示器
-        int displayNum = 2;
-        foreach (var m in monitors.Where(m => !m.IsPrimary))
-        {
-            TargetMonitorCombo.Items.Add(new ComboBoxItem
-            {
-                Content = $"显示器 {displayNum} - {m.Width}×{m.Height}",
-                Tag = m.Index.ToString()
-            });
-            displayNum++;
+            var tb = taskbars[i];
+            string label = i == 0
+                ? $"主显示器 - {tb.Width}×{tb.Height} (默认)"
+                : $"显示器 {i + 1} - {tb.Width}×{tb.Height}";
+            TargetMonitorCombo.Items.Add(new ComboBoxItem { Content = label, Tag = i.ToString() });
         }
 
         // 只有多显示器时才显示"所有显示器"选项
-        if (monitors.Count > 1)
+        if (taskbars.Count > 1)
         {
             TargetMonitorCombo.Items.Add(new ComboBoxItem { Content = "所有显示器", Tag = "-1" });
         }
@@ -516,32 +486,6 @@ public sealed partial class SettingsPage : Page
         }
         TargetMonitorCombo.SelectedIndex = 0; // 默认主显示器
     }
-
-    #region 显示器枚举 P/Invoke
-
-    private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT lprcMonitor, IntPtr dwData);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct MONITORINFOEX
-    {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string szDevice;
-    }
-
-    #endregion
 
     /// <summary>
     /// 刷新透明度开关状态显示
@@ -577,6 +521,32 @@ public sealed partial class SettingsPage : Page
             App.Transparency.Disable();
 
         RefreshTransparencyStatus();
+    }
+
+    /// <summary>
+    /// 按 Tag 字符串值选中 ComboBox 项（不依赖 SelectedIndex 顺序）
+    /// </summary>
+    private static void SelectComboByTag(ComboBox combo, string tag, int fallbackIndex)
+    {
+        for (int i = 0; i < combo.Items.Count; i++)
+        {
+            if (combo.Items[i] is ComboBoxItem item && (item.Tag as string) == tag)
+            {
+                combo.SelectedIndex = i;
+                return;
+            }
+        }
+        combo.SelectedIndex = fallbackIndex;
+    }
+
+    /// <summary>
+    /// 读取当前选中 ComboBoxItem 的 Tag 值（int 类型）
+    /// </summary>
+    private static int ReadComboTag(ComboBox combo, int fallback)
+    {
+        if (combo.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag as string, out int tag))
+            return tag;
+        return fallback;
     }
 
     /// <summary>

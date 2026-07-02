@@ -164,11 +164,19 @@ public sealed class TaskbarHelper
             result.Add(info);
         }
 
-        // 按显示器从左到右排序，确保主显示器排第一
-        // 主任务栏（Shell_TrayWnd）始终是主显示器
+        // 按显示器从左到右排序
         result.Sort((a, b) => a.X.CompareTo(b.X));
 
-        // 标记显示器索引：0=主显示器, 1,2...=其他
+        // 确保主显示器（Shell_TrayWnd）始终排在索引 0
+        int primaryIdx = result.FindIndex(t => t.TaskbarHwnd == primaryHwnd);
+        if (primaryIdx > 0)
+        {
+            var primary = result[primaryIdx];
+            result.RemoveAt(primaryIdx);
+            result.Insert(0, primary);
+        }
+
+        // 标记显示器索引：0=主显示器, 1,2...=其他（从左到右）
         for (int i = 0; i < result.Count; i++)
             result[i].MonitorIndex = i;
 

@@ -47,15 +47,31 @@
 
   <!-- 发布时：补 PRI/XBF → 移入 Panon.Windows_portable 子目录（方便直接压缩分发） -->
   <Target Name="PostPublish" AfterTargets="Publish">
+    <!-- 补 PRI/XBF -->
     <ItemGroup>
       <_MissingResources Include="$(OutDir)*.pri" />
       <_MissingResources Include="$(OutDir)*.xbf" />
     </ItemGroup>
     <Copy SourceFiles="@(_MissingResources)" DestinationFolder="$(PublishDir)" />
-    <ItemGroup>
-      <_PublishedFiles Include="$(PublishDir)*" Exclude="$(PublishDir)Panon.Windows_portable" />
-    </ItemGroup>
+    <!-- 创建便携版子目录 -->
     <MakeDir Directories="$(PublishDir)Panon.Windows_portable" />
-    <Move SourceFiles="@(_PublishedFiles)" DestinationFolder="$(PublishDir)Panon.Windows_portable" />
+    <!-- 移动顶级文件（按扩展名逐个匹配，避免 MSBuild Move 不支持目录的问题） -->
+    <ItemGroup>
+      <_PublishTopFiles Include="$(PublishDir)*.dll" />
+      <_PublishTopFiles Include="$(PublishDir)*.exe" />
+      <_PublishTopFiles Include="$(PublishDir)*.json" />
+      <_PublishTopFiles Include="$(PublishDir)*.pdb" />
+      <_PublishTopFiles Include="$(PublishDir)*.pri" />
+      <_PublishTopFiles Include="$(PublishDir)*.xbf" />
+    </ItemGroup>
+    <Move SourceFiles="@(_PublishTopFiles)" DestinationFolder="$(PublishDir)Panon.Windows_portable" />
+    <!-- 移动 Assets 目录：复制文件（保留目录结构）后删除源目录 -->
+    <ItemGroup>
+      <_AssetsFiles Include="$(PublishDir)Assets\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_AssetsFiles)"
+          DestinationFiles="@(_AssetsFiles->'$(PublishDir)Panon.Windows_portable\Assets\%(RecursiveDir)%(Filename)%(Extension)')"
+          Condition="@(_AssetsFiles->Count()) > 0" />
+    <RemoveDir Directories="$(PublishDir)Assets" Condition="Exists('$(PublishDir)Assets')" />
   </Target>
 </Project>
