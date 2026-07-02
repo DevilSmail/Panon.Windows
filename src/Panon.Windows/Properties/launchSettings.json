@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Panon.Windows (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Panon.Windows (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

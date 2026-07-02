@@ -1,0 +1,21 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.DotSettings.user
+
+# Build output
+*.plasmoid
+*.tgz
+publish_*/
+
+# IDE
+.vs/
+.idea/
+
+# Logs
+*.log
+
+# Local docs (not for git)
+docs/
