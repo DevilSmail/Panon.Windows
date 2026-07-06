@@ -54,7 +54,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 从 [Releases](https://github.com/DevilSmail/Panon.Windows/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `Panon.Windows.exe` 即可运行。
 
-> 无需安装任何运行时——程序已自包含所有依赖。
+> 需要安装 [.NET 8 运行时](https://dotnet.microsoft.com/download/dotnet/8.0)（桌面运行时，x64）+ [Windows App SDK 2.2](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads)。
 
 **系统要求：**
 
@@ -123,15 +123,19 @@ dotnet publish --configuration Release -r win-x64 -o publish_portable
 | 音频    | 低音分辨率   | FFT 频率范围控制，值越小范围越宽 |
 | 显示    | 图形效果     | 7 种频谱动画风格                 |
 | 显示    | 填充模式     | 铺满任务栏 / 仅空白区域（默认）  |
+| 显示    | 反转频谱     | 安静时满柱，有声时缩短           |
 | 显示    | 柱子宽度     | 单个柱子的像素宽度 (1~30)        |
 | 显示    | 柱间间隙     | 相邻柱子的像素间隙 (0~20)        |
 | 显示    | 频谱方向     | 靠下 / 靠上 / 居中 / 靠左 / 靠右 |
 | 显示    | 帧率         | 10~60 FPS，默认 30               |
 | 颜色    | 色彩空间     | HSL / HSLuv                      |
 | 颜色    | 色相范围     | -4000~4000                       |
+| 颜色    | 饱和度       | 0~100                            |
+| 颜色    | 亮度         | 0~100                            |
 | 颜色    | 预设配色     | 8 套内置方案 + 随机颜色          |
+| Windows | 覆盖模式     | 任务栏在上 / 频谱在上             |
 | Windows | 目标显示器   | 主显示器 / 指定 / 所有           |
-| Windows | 填充模式     | 铺满任务栏 / 仅空白区域          |
+| Windows | 频谱窗口高度 | 0=自动（默认）/ 自定义像素高度    |
 | Windows | 系统透明效果 | 开启 Windows 任务栏透明          |
 | Windows | 开机自启     | 注册表 Run 启动项                |
 
@@ -158,7 +162,7 @@ dotnet publish --configuration Release -r win-x64 -o publish_portable
 | 渲染引擎 | OpenGL + GLSL               | 纯软件 CPU 渲染（直接写像素）                |
 | 音频捕获 | PyAudio / PulseAudio        | NAudio WASAPI Loopback                       |
 | 窗口系统 | KDE Plasmoid                | Win32 分层窗口 + WinUI 3                     |
-| 着色器   | 原生 GLSL                   | CPU 模拟（对齐原版 12 种效果，UI 开放 7 种） |
+| 着色器   | 原生 GLSL                   | CPU 模拟（已实现 7 种，原版共 12 种）        |
 | 配置文件 | KConfig (~/.config/panonrc) | JSON (%APPDATA%/Panon/settings.json)         |
 
 ---
