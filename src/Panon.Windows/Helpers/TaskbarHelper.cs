@@ -49,7 +49,53 @@ public sealed class TaskbarHelper
     private IntPtr _cachedTaskbarHwnd = IntPtr.Zero;
     private int _cachedTaskbarWidth;
     private DateTime _lastUiaRefresh = DateTime.MinValue;
-    private static readonly TimeSpan UiaRefreshInterval = TimeSpan.FromMilliseconds(500);
+    // 正常 500ms 刷新；静音/暂停时拉长到 3s，降低 UIA COM 引用压力
+    private static readonly TimeSpan UiaRefreshIntervalActive = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan UiaRefreshIntervalIdle = TimeSpan.FromSeconds(3);
+    private TimeSpan _uiaRefreshInterval = UiaRefreshIntervalActive;
+
+    /// <summary>
+    /// 设置 UIA 刷新模式：true=正常 500ms，false=静音/暂停 3s
+    /// 静音时任务栏按钮布局稳定，慢刷新可显著降低 COM 引用压力
+    /// </summary>
+    public void SetIdleMode(bool idle)
+    {
+        var newInterval = idle ? UiaRefreshIntervalIdle : UiaRefreshIntervalActive;
+        if (_uiaRefreshInterval != newInterval)
+        {
+            _uiaRefreshInterval = newInterval;
+            // 模式切换时强制下次刷新（从静音恢复时立即拿到最新按钮布局）
+            _lastUiaRefresh = DateTime.MinValue;
+        }
+    }
+
+    // ── 合并/结果缓存（避免每帧分配 List） ────────────────────
+    // _cachedUiaRects 变化时一并失效；regions 还随 minBarWidth 变化失效
+    private List<(int X, int Width)>? _cachedMerged;
+    private List<(int X, int Width)>? _cachedRegions;
+    private int _cachedMinBarWidth = -1;
+    private int _cachedTaskbarTop;
+
+    // ── Flyout 防御回退 ──────────────────────────────────────
+    // 当 Quick Settings / 音量 / IME 状态 flyout 弹出时，任务栏按钮 UIA 报告的
+    // BoundingRectangle 会临时变宽（含激活态高亮指示器），导致 free regions 算出空。
+    //
+    // 修复策略：用两套独立计数器
+    //   - 非空稳定计数 _goodConfirmCount：连续 3 次（1.5s）非空且一致 → 确认 _stableRegions
+    //   - 空稳定计数 _emptyConfirmCount：连续 8 次（4s）空 → 接受"真的没空白"，清空 _stableRegions
+    //
+    // 关键不变量：_stableRegions 一旦确认，flyout 期间永远不会被打消。
+    // 唯一的清空条件是连续 8 次（4 秒）空结果（用户长时间无操作且任务栏真的被填满）。
+    private List<(int X, int Width)>? _stableRegions;
+    private List<(int X, int Width)>? _stableCandidate;  // 候选稳定结果
+    private int _goodConfirmCount;        // 当前非空候选的连续一致次数
+    private int _emptyConfirmCount;       // 连续空结果次数（独立计数，不污染 good 计数）
+    private const int StableConfirmCount = 3;  // 连续 3 次（1.5s）非空一致 → 确认稳定
+    private const int EmptyStableCount = 8;    // 连续 8 次（4s）空 → 接受"真的没空白"
+
+    // 即时回退：_stableRegions 需 1.5s 确认，在此之前用 _lastGoodRegions 防御
+    // 每次 UIA 返回非空结果时更新，空结果时不清零，用于启动初期 flyout 防护
+    private List<(int X, int Width)>? _lastGoodRegions;
 
     /// <summary>
     /// 任务栏位置
@@ -203,56 +249,163 @@ public sealed class TaskbarHelper
     /// <param name="taskbarHwnd">目标任务栏窗口句柄，为 IntPtr.Zero 时自动获取主任务栏</param>
     public List<(int X, int Width)> GetTaskbarFreeRegions(int minBarWidth, IntPtr taskbarHwnd = default)
     {
-        var regions = new List<(int X, int Width)>();
         if (taskbarHwnd == IntPtr.Zero)
             taskbarHwnd = FindWindow("Shell_TrayWnd", null);
-        if (taskbarHwnd == IntPtr.Zero) return regions;
+        if (taskbarHwnd == IntPtr.Zero)
+            return _cachedRegions ?? new List<(int X, int Width)>();
 
         GetWindowRect(taskbarHwnd, out RECT taskbarRect);
         int tw = taskbarRect.Right - taskbarRect.Left;
 
-        // ── UIA 缓存刷新（500ms 间隔） ──
+        // ── UIA 缓存刷新（500ms 正常 / 3s 静音） ──
+        // 任一身份/尺寸/时间变化都触发重新走 UIA，并连带失效 merged/regions 缓存
         var now = DateTime.Now;
-        if (_cachedUiaRects == null || _cachedTaskbarHwnd != taskbarHwnd
-            || _cachedTaskbarWidth != tw || (now - _lastUiaRefresh) > UiaRefreshInterval)
+        bool uiaStale = _cachedUiaRects == null || _cachedTaskbarHwnd != taskbarHwnd
+            || _cachedTaskbarWidth != tw || _cachedTaskbarTop != taskbarRect.Top
+            || (now - _lastUiaRefresh) > _uiaRefreshInterval;
+        if (uiaStale)
         {
-            var uiaRects = UiaInterop.GetTaskbarButtonRects(taskbarHwnd, taskbarRect.Left, tw);
+            // taskbarTop/height 传入用于 Y 坐标过滤（排除弹出的 flyout 元素）
+            int taskbarHeight = taskbarRect.Bottom - taskbarRect.Top;
+            var uiaRects = UiaInterop.GetTaskbarButtonRects(taskbarHwnd, taskbarRect.Left, tw, taskbarRect.Top, taskbarHeight);
             _cachedUiaRects = uiaRects;
             _cachedTaskbarHwnd = taskbarHwnd;
             _cachedTaskbarWidth = tw;
+            _cachedTaskbarTop = taskbarRect.Top;
             _lastUiaRefresh = now;
+            _cachedMerged = null;   // 失效下游缓存
+            _cachedRegions = null;
         }
 
-        if (_cachedUiaRects.Count == 0) return regions;
-
-        // 合并重叠区域（直接在 List 上原地合并避免 struct 拷贝问题）
-        _cachedUiaRects.Sort((a, b) => a.X.CompareTo(b.X));
-        var merged = new List<(int X, int Width)> { _cachedUiaRects[0] };
-        for (int i = 1; i < _cachedUiaRects.Count; i++)
+        // ── 合并重叠区域 + 计算空白区域 ──
+        // 注意：UIA 空结果时 _cachedMerged 不计算，_cachedRegions 直接设空。
+        // 不能 early return —— 必须走到后面的稳定回退逻辑，让 flyout 防御生效。
+        if (_cachedUiaRects!.Count == 0)
         {
-            var (x, w) = _cachedUiaRects[i];
-            var last = merged[merged.Count - 1];
-            int lastEnd = last.X + last.Width;
-            if (x <= lastEnd)
-                merged[merged.Count - 1] = (last.X, Math.Max(lastEnd, x + w) - last.X);
+            _cachedMerged = null;
+            _cachedRegions = new List<(int X, int Width)>(0);
+        }
+        else
+        {
+            if (_cachedMerged == null)
+            {
+                _cachedUiaRects.Sort((a, b) => a.X.CompareTo(b.X));
+                var merged = new List<(int X, int Width)> { _cachedUiaRects[0] };
+                for (int i = 1; i < _cachedUiaRects.Count; i++)
+                {
+                    var (x, w) = _cachedUiaRects[i];
+                    var last = merged[merged.Count - 1];
+                    int lastEnd = last.X + last.Width;
+                    if (x <= lastEnd)
+                        merged[merged.Count - 1] = (last.X, Math.Max(lastEnd, x + w) - last.X);
+                    else
+                        merged.Add((x, w));
+                }
+                _cachedMerged = merged;
+                _cachedRegions = null;   // merged 变了，regions 也要重算
+            }
+
+            if (_cachedRegions == null || _cachedMinBarWidth != minBarWidth)
+            {
+                var regions = new List<(int X, int Width)>();
+                int pos = 0;
+                foreach (var (x, w) in _cachedMerged!)
+                {
+                    int gapWidth = x - pos;
+                    if (gapWidth >= minBarWidth)
+                        regions.Add((pos, gapWidth));
+                    pos = Math.Max(pos, x + w);
+                }
+                int lastGap = tw - pos;
+                if (lastGap >= minBarWidth)
+                    regions.Add((pos, lastGap));
+
+                _cachedRegions = regions;
+                _cachedMinBarWidth = minBarWidth;
+            }
+        }
+
+        // ── Flyout 防御回退（双计数器稳定窗口）──
+        // 关键设计：空结果和非空结果使用独立的计数器，互不污染。
+        // - 非空：连续 StableConfirmCount 次（1.5s）一致 → 确认 _stableRegions
+        // - 空：连续 EmptyStableCount 次（4s） → 才接受"真的没空白"
+        // 这样 flyout 期间（UIA 抖动、空结果）永远不达到 4s，且 _stableRegions 不会被空结果清空
+        var currentResult = _cachedRegions!;
+
+        if (currentResult.Count > 0)
+        {
+            // ── 非空分支：独立计数 ──
+            // 重置空计数（说明 UIA 正常了）
+            if (_emptyConfirmCount > 0)
+            {
+                _emptyConfirmCount = 0;
+                DebugLog.Write("[Taskbar] Regions recovered from empty");
+            }
+
+            // 更新即时回退（无需等待稳定确认，用于启动初期 flyout 防护）
+            _lastGoodRegions = new List<(int X, int Width)>(currentResult);
+
+            if (RegionsEqual(_stableCandidate, currentResult))
+            {
+                _goodConfirmCount++;
+            }
             else
-                merged.Add((x, w));
-        }
+            {
+                _stableCandidate = new List<(int X, int Width)>(currentResult);
+                _goodConfirmCount = 1;
+            }
 
-        // 计算空白区域
-        int pos = 0;
-        foreach (var (x, w) in merged)
+            // 达到确认阈值 → 记录稳定结果（仅在尚未确认时记录）
+            if (_goodConfirmCount >= StableConfirmCount && _stableRegions == null)
+            {
+                _stableRegions = new List<(int X, int Width)>(currentResult);
+                DebugLog.Write($"[Taskbar] Stable regions confirmed ({_stableRegions.Count} gaps, took {_goodConfirmCount * 500}ms)");
+            }
+
+            return currentResult;
+        }
+        else
         {
-            int gapWidth = x - pos;
-            if (gapWidth >= minBarWidth)
-                regions.Add((pos, gapWidth));
-            pos = Math.Max(pos, x + w);
-        }
-        int lastGap = tw - pos;
-        if (lastGap >= minBarWidth)
-            regions.Add((pos, lastGap));
+            // ── 空分支：独立计数，绝不污染 _goodConfirmCount ──
+            // 重置非空计数（说明 UIA 又出问题了）
+            _goodConfirmCount = 0;
+            _stableCandidate = null;
 
-        return regions;
+            _emptyConfirmCount++;
+            if (_emptyConfirmCount == EmptyStableCount && _stableRegions != null)
+            {
+                // 连续 4 秒空结果 → 接受"真的没空白"，清空稳定结果
+                _stableRegions = null;
+                DebugLog.Write("[Taskbar] Sustained empty for 4s, accepting as 'no free region'");
+            }
+
+            // 回退顺序: _stableRegions（已确认）> _lastGoodRegions（即时）> 空
+            if (_stableRegions != null)
+            {
+                DebugLog.Write($"[Taskbar] Empty #{_emptyConfirmCount}/{EmptyStableCount}, falling back to stable ({_stableRegions.Count} gaps)");
+                return _stableRegions;
+            }
+            if (_lastGoodRegions != null)
+            {
+                DebugLog.Write($"[Taskbar] Empty #{_emptyConfirmCount}/{EmptyStableCount}, falling back to last good ({_lastGoodRegions.Count} gaps)");
+                return _lastGoodRegions;
+            }
+            return currentResult;
+        }
+    }
+
+    /// <summary>
+    /// 比较两个 regions 列表是否"实质上一致"（X 和 Width 相同）
+    /// </summary>
+    private static bool RegionsEqual(List<(int X, int Width)>? a, List<(int X, int Width)>? b)
+    {
+        if (a == null || b == null) return false;
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (a[i].X != b[i].X || a[i].Width != b[i].Width) return false;
+        }
+        return true;
     }
 }
 

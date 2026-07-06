@@ -61,6 +61,14 @@ public sealed class LayeredOverlayWindow : IDisposable
     // 缓存的 TaskbarHelper（避免每帧分配）
     private readonly TaskbarHelper _taskbarHelper = new();
 
+    // 静默频谱缓存（无音频时复用，避免每帧分配）
+    private static readonly SpectrumData SilentSpectrum = new()
+    {
+        LeftChannel = new float[76],
+        RightChannel = new float[76],
+        Volume = 0
+    };
+
     /// <summary>覆盖模式: 1=Under(任务栏覆盖在频谱上面,默认), 2=Above(频谱覆盖在任务栏上面)</summary>
     private int _overlayMode = 1;
 
@@ -80,18 +88,25 @@ public sealed class LayeredOverlayWindow : IDisposable
     /// 创建分层窗口并定位到指定任务栏
     /// </summary>
     /// <param name="taskbarInfo">任务栏信息，为 null 时自动获取主显示器任务栏</param>
-    public void Create(TaskbarInfo? taskbarInfo = null)
+    /// <param name="maxHeightOverride">高度覆盖：0=用任务栏高度，>0=自定义高度（底部对齐任务栏）</param>
+    public void Create(TaskbarInfo? taskbarInfo = null, int maxHeightOverride = 0)
     {
         if (_hwnd != IntPtr.Zero) return;
 
         taskbarInfo ??= new TaskbarHelper().GetTaskbarInfo();
 
         _width = taskbarInfo.Width;
-        _height = taskbarInfo.Height; // 窗口高度 = 任务栏高度
+        // 高度：maxHeightOverride > 0 时取 min(任务栏高度, 自定义高度)，否则用任务栏高度
+        // 限制不超过任务栏高度，避免频谱延伸到任务栏上方区域
+        _height = maxHeightOverride > 0
+            ? Math.Min(taskbarInfo.Height, maxHeightOverride)
+            : taskbarInfo.Height;
 
-        // 频谱窗口与任务栏完全重叠
+        // 频谱窗口 X 与任务栏左对齐
         int overlayX = taskbarInfo.X;
-        int overlayY = taskbarInfo.Y;
+        // 底部对齐：overlay 底边 = 任务栏底边（自定义高度 < 任务栏高度时，频谱显示在任务栏底部；
+        // 自定义高度 > 任务栏高度时，频谱向上延伸超出任务栏）
+        int overlayY = taskbarInfo.Y + (taskbarInfo.Height - _height);
 
         // 保存任务栏句柄（用于 Z-order 维护）
         _taskbarHwnd = taskbarInfo.TaskbarHwnd;
@@ -211,28 +226,21 @@ public sealed class LayeredOverlayWindow : IDisposable
         if (!_isRunning || _renderer == null || _hwnd == IntPtr.Zero) return;
 
         SpectrumData currentSpectrum;
+        bool isIdle;
         lock (_spectrumLock)
         {
             // 如果频谱数据超过 200ms 未更新（音频捕获已停止），使用零值
             // 让衰减处理器自然衰减到零，最终显示底部彩色细线
-            if (_lastSpectrumUpdateTime != DateTime.MinValue &&
-                (DateTime.Now - _lastSpectrumUpdateTime).TotalMilliseconds > 200)
-            {
-                currentSpectrum = new SpectrumData
-                {
-                    LeftChannel = new float[76],
-                    RightChannel = new float[76],
-                    Volume = 0
-                };
-            }
-            else
-            {
-                currentSpectrum = _lastSpectrum;
-            }
+            isIdle = _lastSpectrumUpdateTime != DateTime.MinValue &&
+                (DateTime.Now - _lastSpectrumUpdateTime).TotalMilliseconds > 200;
+            currentSpectrum = isIdle ? SilentSpectrum : _lastSpectrum;
         }
 
         try
         {
+            // 静音/暂停时拉长 UIA 刷新间隔（500ms→3s），降低 COM 引用压力
+            _taskbarHelper.SetIdleMode(isIdle);
+
             // 空白区域填充模式：每帧重算空白区域（UIA 500ms 缓存）
             if (_renderer.FillMode == 1)
             {
@@ -253,10 +261,10 @@ public sealed class LayeredOverlayWindow : IDisposable
             UpdateLayeredWindow();
 
             // 诊断：记录渲染（前 10 次 + 每隔 5 秒一次）
+#if DEBUG
             _renderCount++;
             if (_renderCount <= 10 || (DateTime.Now - _lastRenderTime).TotalSeconds > 5)
             {
-                // 检查像素数据是否非零
                 int nonZero = 0;
                 int total = _width * _height;
                 unsafe
@@ -267,9 +275,10 @@ public sealed class LayeredOverlayWindow : IDisposable
                         if (p[i] != 0) nonZero++;
                     }
                 }
-            DebugLog.Write($"Render #{_renderCount}: decayMax={processed.LeftChannel.Max():F4}, bars={processed.LeftChannel.Length}, hwnd={_hwnd}, pixels_nonzero={nonZero}/{total}");
+                DebugLog.Write($"Render #{_renderCount}: decayMax={processed.LeftChannel.Max():F4}, bars={processed.LeftChannel.Length}, hwnd={_hwnd}, pixels_nonzero={nonZero}/{total}");
                 _lastRenderTime = DateTime.Now;
             }
+#endif
         }
         catch (Exception ex)
         {
@@ -310,10 +319,10 @@ public sealed class LayeredOverlayWindow : IDisposable
         {
             int err = Marshal.GetLastWin32Error();
             _ulwErrorCount++;
-            // 前 10 次 + 每隔 30 秒记录一次
-            if (_ulwErrorCount <= 10 || (DateTime.Now - _lastUlwErrorTime).TotalSeconds > 30)
+            // 前 5 次 + 每隔 5 分钟记录一次（Release 也保留，关键错误不能沉默）
+            if (_ulwErrorCount <= 5 || (DateTime.Now - _lastUlwErrorTime).TotalMinutes > 5)
             {
-            DebugLog.Write($"UpdateLayeredWindow FAILED #{_ulwErrorCount}: error={err}, hwnd={_hwnd}");
+                DebugLog.Write($"UpdateLayeredWindow FAILED #{_ulwErrorCount}: error={err}, hwnd={_hwnd}");
                 _lastUlwErrorTime = DateTime.Now;
             }
         }
@@ -321,11 +330,12 @@ public sealed class LayeredOverlayWindow : IDisposable
 
     private int _ulwErrorCount;
     private DateTime _lastUlwErrorTime = DateTime.MinValue;
-
+#if DEBUG
     private int _spectrumLogCount;
     private int _renderCount;
     private DateTime _lastRenderTime = DateTime.MinValue;
     private DateTime _lastSpectrumLogTime = DateTime.MinValue;
+#endif
 
     private void OnSpectrumUpdated(SpectrumData data)
     {
@@ -335,6 +345,7 @@ public sealed class LayeredOverlayWindow : IDisposable
             _lastSpectrumUpdateTime = DateTime.Now;
         }
         // 诊断：持续记录前 20 次 + 每 5 秒一次
+#if DEBUG
         _spectrumLogCount++;
         if (_spectrumLogCount <= 20 || (DateTime.Now - _lastSpectrumLogTime).TotalSeconds > 5)
         {
@@ -342,6 +353,7 @@ public sealed class LayeredOverlayWindow : IDisposable
             DebugLog.Write($"Spectrum #{_spectrumLogCount}: {data.LeftChannel.Length} bars, max={maxVal:F4}");
             _lastSpectrumLogTime = DateTime.Now;
         }
+#endif
     }
 
     /// <summary>

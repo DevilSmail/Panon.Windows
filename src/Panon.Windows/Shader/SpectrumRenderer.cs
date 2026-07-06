@@ -41,6 +41,10 @@ public sealed class SpectrumRenderer
     private int[]? _resampleIndices;
     private float[]? _resampleFracs;
 
+    // 重采样结果池（避免每帧分配）
+    private float[] _resampleBufferL = Array.Empty<float>();
+    private float[] _resampleBufferR = Array.Empty<float>();
+
     private uint[]? _spectrogramBuffer;
 
     public void InitializeSoftware(int width, int height)
@@ -145,8 +149,10 @@ public sealed class SpectrumRenderer
         int targetBarCount = (totalFreeW + GapWidth) / cellSize;
         if (targetBarCount < 1) targetBarCount = 1;
 
-        float[] rL = Resample(left, left.Length, targetBarCount);
-        float[] rR = Resample(right, right.Length, targetBarCount);
+        Resample(left, left.Length, targetBarCount, ref _resampleBufferL);
+        Resample(right, right.Length, targetBarCount, ref _resampleBufferR);
+        float[] rL = _resampleBufferL;
+        float[] rR = _resampleBufferR;
         if (_peakHeights.Length != targetBarCount) _peakHeights = new float[targetBarCount];
 
         // 跨空白段连续编号绘制
@@ -389,10 +395,10 @@ public sealed class SpectrumRenderer
 
     #region 公共
 
-    private float[] Resample(float[] source, int srcCount, int targetCount)
+    private void Resample(float[] source, int srcCount, int targetCount, ref float[] buffer)
     {
-        if (srcCount == 0) return new float[targetCount];
-        if (srcCount == targetCount) return source;
+        if (srcCount == 0) { buffer = new float[targetCount]; return; }
+        if (srcCount == targetCount) { buffer = source; return; }
 
         // 权重缓存：srcCount/targetCount 不变时跳过浮点除法+索引计算
         if (_cachedSrcCount != srcCount || _cachedTargetCount != targetCount
@@ -411,16 +417,17 @@ public sealed class SpectrumRenderer
             }
         }
 
-        var result = new float[targetCount];
+        if (buffer.Length != targetCount)
+            buffer = new float[targetCount];
+
         int[] idx = _resampleIndices;
         float[] fr = _resampleFracs;
         int lastSrc = srcCount - 1;
         for (int i = 0; i < targetCount; i++)
         {
             int si = idx[i];
-            result[i] = si >= lastSrc ? source[lastSrc] : source[si] * (1f - fr[i]) + source[si + 1] * fr[i];
+            buffer[i] = si >= lastSrc ? source[lastSrc] : source[si] * (1f - fr[i]) + source[si + 1] * fr[i];
         }
-        return result;
     }
 
     public float GetMaxPeakHeight()

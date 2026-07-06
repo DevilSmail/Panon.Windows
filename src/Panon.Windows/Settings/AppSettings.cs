@@ -32,6 +32,7 @@ public sealed class AppSettings
     /// <summary>柱间间隙宽度（像素），0=无缝隙</summary>
     public int GapWidth { get; set; } = 3;
 
+
     // === 图形效果设置（GLSL → CPU 软件模拟） ===
     /// <summary>
     /// 当前图形效果名称（对应 Shader/Shaders/ 下的 .frag 文件）
@@ -54,4 +55,10 @@ public sealed class AppSettings
     /// </summary>
     public string TargetMonitor { get; set; } = "0";
     public int OverlayMode { get; set; } = 1; // 1=UnderTaskbar(任务栏覆盖在频谱上面,默认), 2=AboveTaskbar(频谱覆盖在任务栏上面)
+
+    /// <summary>
+    /// 频谱窗口最大高度（像素）。0=使用任务栏高度（默认，自动适配）；
+    /// >0=自定义高度，底部对齐任务栏（适用任务栏高度异常或想要更矮/更高的频谱效果）。
+    /// </summary>
+    public int MaxHeight { get; set; } = 0;
 }

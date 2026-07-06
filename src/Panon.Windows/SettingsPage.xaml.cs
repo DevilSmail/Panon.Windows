@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.Win32;
+using Panon.Windows.Helpers;
 using Panon.Windows.Settings;
 
 namespace Panon.Windows;
@@ -106,6 +107,14 @@ public sealed partial class SettingsPage : Page
         // Windows
         // 覆盖模式: Tag 值 1=Under, 2=Above
         SelectComboByTag(OverlayModeCombo, _settings.OverlayMode.ToString(), 0);
+        // 频谱窗口高度：动态设置 Slider 上限为当前任务栏高度，避免拉到超过任务栏的无效值
+        try
+        {
+            int taskbarHeight = new TaskbarHelper().GetTaskbarInfo().Height;
+            MaxHeightSlider.Maximum = taskbarHeight;
+        }
+        catch { /* 探测失败保留默认上限 */ }
+        MaxHeightSlider.Value = Math.Min(_settings.MaxHeight, MaxHeightSlider.Maximum);
 
         // 图形效果
         VisualEffectCombo.SelectedIndex = 0; // 默认柱状图
@@ -142,6 +151,7 @@ public sealed partial class SettingsPage : Page
         FpsValue.Text = $"当前: {(int)FpsSlider.Value}";
         BarWidthValue.Text = $"当前: {(int)BarWidthSlider.Value}px";
         GapWidthValue.Text = $"当前: {(int)GapWidthSlider.Value}px";
+        MaxHeightValue.Text = MaxHeightSlider.Value == 0 ? "自动" : $"当前: {(int)MaxHeightSlider.Value}px";
         HueFromValue.Text = $"当前: {(int)HueFromSlider.Value}";
         HueToValue.Text = $"当前: {(int)HueToSlider.Value}";
         SaturationValue.Text = $"当前: {(int)SaturationSlider.Value}";
@@ -238,6 +248,24 @@ public sealed partial class SettingsPage : Page
         UpdateValueDisplays();
         SaveSettings();
         ApplySettingsToEngine();
+    }
+
+    /// <summary>
+    /// 频谱窗口高度变化：需要重建 overlay（DIB 尺寸改变）
+    /// </summary>
+    private void OnMaxHeightChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_isLoading) return;
+
+        int newHeight = (int)MaxHeightSlider.Value;
+        // 仅当值确实变化时重建（避免拖动过程中频繁重建）
+        if (_settings.MaxHeight == newHeight) return;
+
+        _settings.MaxHeight = newHeight;
+        UpdateValueDisplays();
+        SaveSettings();
+        // 高度变化需要重建 overlay（DIB section 尺寸改变）
+        App.RecreateOverlays(_settings.TargetMonitor);
     }
 
     /// <summary>

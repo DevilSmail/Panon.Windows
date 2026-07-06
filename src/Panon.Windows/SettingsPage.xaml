@@ -308,6 +308,20 @@
                     </StackPanel>
 
                     <StackPanel Style="{StaticResource SettingItem}">
+                        <Slider x:Name="MaxHeightSlider" Header="频谱窗口高度"
+                                Minimum="0" Maximum="80" StepFrequency="1" TickFrequency="10" TickPlacement="Outside"
+                                ValueChanged="OnMaxHeightChanged" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Style="{StaticResource HintText}" Text="0=自动（跟随任务栏高度，默认）；&gt;0=限制频谱高度为该值（不超过任务栏高度），底部对齐任务栏。适用某些电脑任务栏偏高导致频谱效果不好的情况。" />
+                            <TextBlock Grid.Column="1" x:Name="MaxHeightValue" Style="{StaticResource ValueText}" />
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel Style="{StaticResource SettingItem}">
                         <ComboBox x:Name="TargetMonitorCombo" Header="目标显示器"
                                   HorizontalAlignment="Stretch"
                                   SelectionChanged="OnSettingChanged">

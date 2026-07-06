@@ -12,9 +12,14 @@
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>false</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- 解包应用自包含部署（已禁用——便携版不包含 WinAppSDK，目标机器需安装 Windows App Runtime）
+    <WindowsAppSdkSelfContained Condition="'$(Configuration)' == 'Release'">true</WindowsAppSdkSelfContained>
+    <WindowsAppSdkBootstrapInitialize Condition="'$(Configuration)' == 'Release'">true</WindowsAppSdkBootstrapInitialize>
+    -->
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
     <ApplicationIcon>Assets\PanonWindows.ico</ApplicationIcon>
   </PropertyGroup>
 

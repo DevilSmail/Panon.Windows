@@ -9,6 +9,9 @@ public sealed class DecayProcessor
 {
     private float[] _prevLeft = Array.Empty<float>();
     private float[] _prevRight = Array.Empty<float>();
+    private float[] _resultLeft = Array.Empty<float>();
+    private float[] _resultRight = Array.Empty<float>();
+    private SpectrumData? _resultData;
 
     /// <summary>
     /// 正常衰减因子 (每帧乘以此值，值越小衰减越快)
@@ -46,58 +49,51 @@ public sealed class DecayProcessor
     public float MinValue { get; set; } = 0.002f;
 
     /// <summary>
-    /// 对频谱数据应用衰减处理
+    /// 对频谱数据应用衰减处理（复用内部缓冲区，减少 GC 压力）
     /// </summary>
     public SpectrumData Process(SpectrumData input)
     {
-        var left = ApplyDecay(input.LeftChannel, ref _prevLeft, input.Volume);
-        var right = ApplyDecay(input.RightChannel, ref _prevRight, input.Volume);
+        ApplyDecay(input.LeftChannel, ref _prevLeft, ref _resultLeft, input.Volume);
+        ApplyDecay(input.RightChannel, ref _prevRight, ref _resultRight, input.Volume);
 
-        return new SpectrumData
-        {
-            LeftChannel = left,
-            RightChannel = right,
-            Volume = input.Volume,
-            BeatDetected = input.BeatDetected
-        };
+        // 复用 SpectrumData 对象（渲染器同步消费，不会跨帧持有引用）
+        if (_resultData == null)
+            _resultData = new SpectrumData();
+        _resultData.LeftChannel = _resultLeft;
+        _resultData.RightChannel = _resultRight;
+        _resultData.Volume = input.Volume;
+        _resultData.BeatDetected = input.BeatDetected;
+        return _resultData;
     }
 
-    private float[] ApplyDecay(float[] current, ref float[] previous, float volume)
+    private void ApplyDecay(float[] current, ref float[] previous, ref float[] result, float volume)
     {
         if (previous.Length != current.Length)
         {
             previous = new float[current.Length];
+            result = new float[current.Length];
         }
 
         bool isSilent = volume < SilenceThreshold;
-        // 优先级：退出因子 > 静音因子 > 正常因子
         float factor = UseExitFactor ? ExitFactor : (isSilent ? SilenceFactor : NormalFactor);
-
-        var result = new float[current.Length];
 
         for (int i = 0; i < current.Length; i++)
         {
             if (current[i] >= previous[i])
             {
-                // 当前值更大，直接使用
                 result[i] = current[i];
             }
             else
             {
-                // 指数衰减：每帧乘以衰减因子，非常平滑
                 result[i] = previous[i] * factor;
-                // 不低于当前输入值
                 if (result[i] < current[i])
                     result[i] = current[i];
-                // 过低则归零
                 if (result[i] < MinValue)
                     result[i] = 0;
             }
 
             previous[i] = result[i];
         }
-
-        return result;
     }
 
     /// <summary>
@@ -107,6 +103,8 @@ public sealed class DecayProcessor
     {
         _prevLeft = Array.Empty<float>();
         _prevRight = Array.Empty<float>();
+        _resultLeft = Array.Empty<float>();
+        _resultRight = Array.Empty<float>();
     }
 
     /// <summary>

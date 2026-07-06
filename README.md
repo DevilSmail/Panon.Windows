@@ -71,7 +71,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 | 依赖                | 必需 | 下载                                             |
 | ------------------- | ---- | ------------------------------------------------ |
 | .NET 8 SDK          | ✅   | https://dotnet.microsoft.com/download/dotnet/8.0 |
-| Windows App SDK 2.2 | ✅   | 包含在 NuGet 还原中，自动下载                    |
+| Windows App SDK 2.2 | ✅   | [下载](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads)（NuGet 还原自动引用，无需手动安装）|
 
 **克隆并编译：**
 

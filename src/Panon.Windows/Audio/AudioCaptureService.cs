@@ -24,6 +24,9 @@ public sealed class AudioCaptureService : IDisposable
 
     public bool IsRunning => _isRunning;
 
+    // 采样缓冲区池（避免每帧分配）
+    private float[] _samplesBuffer = Array.Empty<float>();
+
     // COM 初始化 P/Invoke
     [DllImport("ole32.dll")]
     private static extern int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
@@ -121,7 +124,11 @@ public sealed class AudioCaptureService : IDisposable
 
         int bytesPerSample = _waveFormat.BitsPerSample / 8;
         int sampleCount = e.BytesRecorded / bytesPerSample;
-        var samples = new float[sampleCount];
+
+        // 复用缓冲区
+        if (_samplesBuffer.Length != sampleCount)
+            _samplesBuffer = new float[sampleCount];
+        var samples = _samplesBuffer;
 
         if (_waveFormat.BitsPerSample == 32 && _waveFormat.Encoding == WaveFormatEncoding.IeeeFloat)
         {

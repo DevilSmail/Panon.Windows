@@ -186,6 +186,7 @@ public partial class App : Application
         DestroyOverlays();
 
         var helper = new TaskbarHelper();
+        int maxHeight = _settingsManager?.Current.MaxHeight ?? 0;
 
         if (targetMonitor == "-1")
         {
@@ -194,9 +195,9 @@ public partial class App : Application
             foreach (var tbi in allTaskbars)
             {
                 var overlay = new LayeredOverlayWindow();
-                overlay.Create(tbi);
+                overlay.Create(tbi, maxHeight);
                 _overlayWindows.Add(overlay);
-                DebugLog.Write($"Overlay created on monitor {tbi.MonitorIndex}: {tbi.Width}x{tbi.Height} at ({tbi.X},{tbi.Y})");
+                DebugLog.Write($"Overlay created on monitor {tbi.MonitorIndex}: {tbi.Width}x{tbi.Height} (overlay H={(maxHeight > 0 ? maxHeight : tbi.Height)}) at ({tbi.X},{tbi.Y})");
             }
         }
         else
@@ -206,15 +207,15 @@ public partial class App : Application
             {
                 var tbi = helper.GetTaskbarInfoByIndex(index) ?? helper.GetTaskbarInfo();
                 var overlay = new LayeredOverlayWindow();
-                overlay.Create(tbi);
+                overlay.Create(tbi, maxHeight);
                 _overlayWindows.Add(overlay);
-                DebugLog.Write($"Overlay created on monitor {tbi.MonitorIndex}: {tbi.Width}x{tbi.Height} at ({tbi.X},{tbi.Y})");
+                DebugLog.Write($"Overlay created on monitor {tbi.MonitorIndex}: {tbi.Width}x{tbi.Height} (overlay H={(maxHeight > 0 ? maxHeight : tbi.Height)}) at ({tbi.X},{tbi.Y})");
             }
             else
             {
                 // 解析失败，回退主显示器
                 var overlay = new LayeredOverlayWindow();
-                overlay.Create();
+                overlay.Create(null, maxHeight);
                 _overlayWindows.Add(overlay);
             }
         }

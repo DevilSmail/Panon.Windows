@@ -24,8 +24,24 @@ public sealed class FftProcessor
     private int _bassResolutionLevel = 4;
     private bool _reduceBass = true;
     private int _sampleRate = 44100;
+#if DEBUG
     private int _fftLogCount;
     private DateTime _lastFftLogTime = DateTime.MinValue;
+#endif
+
+    // 预分配 FFT 缓冲区（避免每帧分配，音频线程专用，无需锁）
+    private const int FftSize = 2048;
+    private const int HalfSize = FftSize / 2;
+    private float[] _leftSamples = Array.Empty<float>();
+    private float[] _rightSamples = Array.Empty<float>();
+    private readonly float[] _windowed = new float[FftSize];
+    private readonly float[] _real = new float[FftSize];
+    private readonly float[] _imag = new float[FftSize];
+    private float[] _magnitudes = new float[HalfSize];
+    private float[] _spectrum = Array.Empty<float>();
+
+    // 复用 SpectrumData 对象（LeftChannel/RightChannel 数组不复用，因渲染线程跨帧持有引用）
+    private SpectrumData? _resultData;
 
     /// <summary>
     /// 频谱数据更新事件
@@ -58,109 +74,109 @@ public sealed class FftProcessor
         _sampleRate = format.SampleRate;
         int channels = format.Channels;
 
-        // 分离左右声道
+        // 分离左右声道（复用缓冲区）
         int frameCount = samples.Length / channels;
-        var leftSamples = new float[frameCount];
-        var rightSamples = new float[frameCount];
+        if (_leftSamples.Length != frameCount)
+        {
+            _leftSamples = new float[frameCount];
+            _rightSamples = new float[frameCount];
+        }
 
         for (int i = 0; i < frameCount; i++)
         {
-            leftSamples[i] = samples[i * channels];
-            rightSamples[i] = channels > 1 ? samples[i * channels + 1] : samples[i * channels];
+            _leftSamples[i] = samples[i * channels];
+            _rightSamples[i] = channels > 1 ? samples[i * channels + 1] : samples[i * channels];
         }
 
         // 计算频谱
-        var leftSpectrum = ComputeSpectrum(leftSamples);
-        var rightSpectrum = ComputeSpectrum(rightSamples);
+        var leftSpectrum = ComputeSpectrum(_leftSamples);
+        var rightSpectrum = ComputeSpectrum(_rightSamples);
 
         // 计算 RMS 音量
         float rms = ComputeRms(samples);
 
-        var data = new SpectrumData
-        {
-            LeftChannel = leftSpectrum,
-            RightChannel = rightSpectrum,
-            Volume = rms,
-            BeatDetected = false // 节拍检测后续实现
-        };
+        // 复用 SpectrumData 对象（LeftChannel/RightChannel 数组仍是新分配，因渲染线程跨帧持有引用）
+        var data = _resultData ??= new SpectrumData();
+        data.LeftChannel = leftSpectrum;
+        data.RightChannel = rightSpectrum;
+        data.Volume = rms;
+        data.BeatDetected = false;
 
-        // 诊断：持续记录前 10 次 + 每 5 秒一次
+#if DEBUG
         _fftLogCount++;
         if (_fftLogCount <= 10 || (DateTime.Now - _lastFftLogTime).TotalSeconds > 5)
         {
             DebugLog.Write($"FFT #{_fftLogCount}: {leftSpectrum.Length} bars, max={leftSpectrum.Max():F4}, rms={rms:F4}");
             _lastFftLogTime = DateTime.Now;
         }
+#endif
 
         SpectrumUpdated?.Invoke(data);
     }
 
     private float[] ComputeSpectrum(float[] samples)
     {
-        // FFT 大小: 取 2 的幂次
-        int fftSize = 2048;
-        int useSamples = Math.Min(samples.Length, fftSize);
+        int useSamples = Math.Min(samples.Length, FftSize);
 
-        // 应用汉宁窗
-        var windowed = new float[fftSize];
+        // 应用汉宁窗（复用 _windowed，用后清零尾部）
+        Array.Clear(_windowed, useSamples, FftSize - useSamples);
         for (int i = 0; i < useSamples; i++)
         {
             float window = 0.5f * (1 - (float)Math.Cos(2 * Math.PI * i / (useSamples - 1)));
-            windowed[i] = samples[i] * window;
+            _windowed[i] = samples[i] * window;
         }
 
-        // 就地 FFT (Cooley-Tukey)
-        var real = new float[fftSize];
-        var imag = new float[fftSize];
-        Array.Copy(windowed, real, fftSize);
+        // 就地 FFT（复用 _real / _imag）
+        Array.Copy(_windowed, _real, FftSize);
+        Array.Clear(_imag, 0, FftSize);
+        Fft(_real, _imag, FftSize);
 
-        Fft(real, imag, fftSize);
-
-        // 计算幅度谱
-        int halfSize = fftSize / 2;
-        var magnitudes = new float[halfSize];
-        for (int i = 0; i < halfSize; i++)
+        // 计算幅度谱（复用 _magnitudes）
+        for (int i = 0; i < HalfSize; i++)
         {
-            magnitudes[i] = (float)Math.Sqrt(real[i] * real[i] + imag[i] * imag[i]) / fftSize;
+            _magnitudes[i] = (float)Math.Sqrt(_real[i] * _real[i] + _imag[i] * _imag[i]) / FftSize;
         }
 
         // 根据频率范围截取
         var (lowFreq, highFreq) = FrequencyRanges[_bassResolutionLevel];
-        int lowBin = (int)(lowFreq * fftSize / _sampleRate);
-        int highBin = (int)(highFreq * fftSize / _sampleRate);
-        highBin = Math.Min(highBin, halfSize - 1);
+        int lowBin = (int)(lowFreq * FftSize / _sampleRate);
+        int highBin = (int)(highFreq * FftSize / _sampleRate);
+        highBin = Math.Min(highBin, HalfSize - 1);
 
         int barCount = highBin - lowBin;
         if (barCount <= 0) barCount = 1;
 
-        var spectrum = new float[barCount];
+        // 复用 _spectrum 当长度匹配时
+        if (_spectrum.Length != barCount)
+            _spectrum = new float[barCount];
+
         for (int i = 0; i < barCount; i++)
         {
-            spectrum[i] = magnitudes[lowBin + i];
+            _spectrum[i] = _magnitudes[lowBin + i];
         }
 
         // 低音衰减
         if (_reduceBass)
         {
-            ApplyBassReduction(spectrum, lowBin, _sampleRate, fftSize);
+            ApplyBassReduction(_spectrum, lowBin, _sampleRate, FftSize);
         }
 
-        // 归一化到 0~1
-        float max = spectrum.Max();
+        // 归一化到 0~1 → 返回副本（消费者持有引用，不能返回复用数组）
+        float max = _spectrum.Max();
+        var result = new float[barCount];
         if (max > 0.001f)
         {
-            for (int i = 0; i < spectrum.Length; i++)
+            for (int i = 0; i < barCount; i++)
             {
-                spectrum[i] = Math.Clamp(spectrum[i] / max, 0f, 1f);
+                result[i] = Math.Clamp(_spectrum[i] / max, 0f, 1f);
             }
         }
 
-        return spectrum;
+        return result;
     }
 
     private static void ApplyBassReduction(float[] spectrum, int lowBin, int sampleRate, int fftSize)
     {
-        // 降低低频权重，避免低音主导频谱
         for (int i = 0; i < spectrum.Length; i++)
         {
             double freq = (lowBin + i) * (double)sampleRate / fftSize;
