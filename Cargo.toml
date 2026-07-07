@@ -19,7 +19,7 @@ panic = "abort"       # 去掉 unwind 信息
 [dependencies]
 # Win32 API（微软官方）— WASAPI 音频捕获已 POC 验证可用
 windows = { version = "0.58", features = [
-    "Media_Audio",
+    "Win32_Media_Audio",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
