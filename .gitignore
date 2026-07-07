@@ -1,21 +1,11 @@
-# .NET
-bin/
-obj/
-*.user
-*.suo
-*.DotSettings.user
-
-# Build output
-*.plasmoid
-*.tgz
-publish_*/
+# Rust 构建产物
+/target
+**/*.rs.bk
 
 # IDE
 .vs/
 .idea/
+.vscode/
 
-# Logs
+# 日志
 *.log
-
-# Local docs (not for git)
-docs/
