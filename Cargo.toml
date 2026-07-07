@@ -6,6 +6,9 @@ build = "build.rs"
 description = "Windows 任务栏音频频谱可视化器（Rust 原生版）"
 license = "GPL-3.0"
 
+# 产物名说明：cargo 默认输出 panon-windows.exe（Cargo 不允许包名/二进制名含点号）
+# 发布打包时通过 scripts/package.ps1 重命名为 panon.windows.exe，对齐 C# 版命名
+
 [profile.release]
 opt-level = "z"       # 体积优先
 lto = true            # 链接时优化

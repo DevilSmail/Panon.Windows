@@ -54,7 +54,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 ### 便携版（普通用户）
 
-从 [Releases](https://github.com/DevilSmail/Panon.Windows/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `panon-windows.exe` 即可运行。
+从 [Releases](https://github.com/DevilSmail/Panon.Windows/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `panon.windows.exe` 即可运行。
 
 **系统要求：**
 - Windows 10 version 1809+ 或 Windows 11
@@ -74,7 +74,8 @@ cargo run --release
 **发布便携版：**
 ```powershell
 cargo build --release
-# target/release/panon-windows.exe 即为便携版（约 5 MB）
+# 产物 target/release/panon-windows.exe（约 5 MB）
+# 发布时重命名为 panon.windows.exe（对齐 C# 版命名）
 ```
 
 ---
