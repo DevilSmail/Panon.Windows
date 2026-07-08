@@ -1,5 +1,5 @@
 // panon.windows — Rust 原生版入口
-// 阶段 2：音频捕获 + FFT + 任务栏频谱渲染
+// 阶段 3：音频捕获 + FFT + 衰减处理 + 任务栏频谱渲染
 
 mod app;
 mod audio;
@@ -18,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use audio::capture::AudioCapture;
+use audio::decay::DecayProcessor;
 use audio::fft::FftProcessor;
 use audio::spectrum::SpectrumData;
 use overlay::window::OverlayWindow;
@@ -83,10 +84,11 @@ fn main() {
     println!("Press Ctrl+C to exit");
     println!();
 
-    // 4. FFT 处理器
+    // 4. FFT 处理器 + 衰减处理器
     let mut fft = FftProcessor::new();
     fft.set_bass_resolution_level(4);
     fft.set_reduce_bass(true);
+    let mut decay = DecayProcessor::new();
 
     // 5. 主循环
     let mut last_spectrum = SpectrumData::default();
@@ -97,20 +99,43 @@ fn main() {
     let render_interval = Duration::from_millis(33); // ~30 FPS
     let idle_timeout = Duration::from_millis(200);
     let z_order_interval = Duration::from_secs(2);
+    let exit_timeout = Duration::from_millis(800);
     let mut frame_count = 0u64;
     let mut last_debug = Instant::now();
+    let mut exiting = false;
+    let mut exit_start = Instant::now();
 
     loop {
         // 处理窗口消息
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
+                    exiting = true;
+                    exit_start = Instant::now();
                     capture.stop();
-                    return;
+                    decay.force_exit();
+                    break;
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+        }
+
+        // 退出衰减流程：继续渲染直到频谱归零或超时
+        if exiting {
+            let silent = SpectrumData::default();
+            let decayed = decay.process(&silent);
+            unsafe {
+                overlay.render(&decayed.left_channel, &decayed.right_channel);
+            }
+
+            if decay.is_exit_complete() || exit_start.elapsed() > exit_timeout {
+                println!("[exit] decay complete, exiting");
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(16));
+            continue;
         }
 
         // 接收音频数据 → FFT
@@ -125,7 +150,7 @@ fn main() {
         if last_render.elapsed() >= render_interval {
             let is_idle = last_spectrum_time.elapsed() > idle_timeout;
             let spectrum = if is_idle {
-                // 静默：零值频谱，让像素清零
+                // 静默：零值频谱（volume=0 触发 silence_factor 快速回落）
                 let mut s = last_spectrum.clone();
                 for v in &mut s.left_channel {
                     *v = 0.0;
@@ -139,8 +164,10 @@ fn main() {
                 last_spectrum.clone()
             };
 
+            // 应用衰减后渲染
+            let decayed = decay.process(&spectrum);
             unsafe {
-                overlay.render(&spectrum.left_channel, &spectrum.right_channel);
+                overlay.render(&decayed.left_channel, &decayed.right_channel);
             }
             last_render = Instant::now();
             frame_count += 1;
