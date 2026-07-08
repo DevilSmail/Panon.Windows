@@ -1,5 +1,5 @@
 // panon.windows — Rust 原生版入口
-// 阶段 7：设置窗口 UI (egui) + 共享状态
+// 阶段 8：设置持久化 + 注册表透明效果 + 开机自启 + 单实例
 
 mod app;
 mod audio;
@@ -14,7 +14,13 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::HWND;
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, ERROR_ALREADY_EXISTS};
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegOpenKeyExW, RegSetValueExW, RegDeleteValueW, HKEY, HKEY_CURRENT_USER,
+    KEY_WRITE, REG_SZ,
+};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
@@ -26,6 +32,7 @@ use audio::spectrum::SpectrumData;
 use overlay::window::OverlayWindow;
 use render::renderer::{SpectrumRenderer, VisualEffect};
 use settings::config::AppSettings;
+use settings::transparency::TransparencyManager;
 use taskbar::detect::get_all_taskbars;
 use tray::TrayAction;
 use tray::icon::TrayIcon;
@@ -50,14 +57,106 @@ fn apply_settings_to_renderer(r: &mut SpectrumRenderer, s: &AppSettings) {
     r.fill_mode = s.fill_mode;
 }
 
+/// 单实例检查：通过命名互斥量防止多开
+fn single_instance_check() {
+    unsafe {
+        match CreateMutexW(None, true, w!("Global\\Panon.Windows.SingleInstance")) {
+            Ok(_) => {
+                // CreateMutexW 成功时仍可能返回 ERROR_ALREADY_EXISTS（互斥量已存在）
+                if windows::Win32::Foundation::GetLastError() == ERROR_ALREADY_EXISTS {
+                    eprintln!("Another instance is already running, exiting");
+                    std::process::exit(0);
+                }
+            }
+            Err(e) => {
+                eprintln!("[warn] CreateMutex failed: {}, continuing", e);
+            }
+        }
+    }
+}
+
+/// 开机自启：写/删 HKCU\...\Run\Panon 注册表值
+fn set_startup(enable: bool) {
+    const RUN_KEY: PCWSTR = w!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run");
+    const VAL_NAME: PCWSTR = w!("Panon");
+
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[startup] cannot resolve exe path: {}", e);
+            return;
+        }
+    };
+    // REG_SZ 需要 UTF-16 + null 终止
+    let exe_wide: Vec<u16> = exe_path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_WRITE, &mut hkey).is_err() {
+            eprintln!("[startup] cannot open Run key");
+            return;
+        }
+
+        if enable {
+            // REG_SZ: UTF-16 字节序列
+            let data_bytes: &[u8] = std::slice::from_raw_parts(
+                exe_wide.as_ptr() as *const u8,
+                exe_wide.len() * 2,
+            );
+            if RegSetValueExW(hkey, VAL_NAME, 0, REG_SZ, Some(data_bytes)).is_err() {
+                eprintln!("[startup] failed to write Run value");
+            } else {
+                println!("[startup] auto-start enabled");
+            }
+        } else {
+            // 删除值；值不存在时 RegDeleteValueW 返回错误，忽略
+            let _ = RegDeleteValueW(hkey, VAL_NAME);
+            println!("[startup] auto-start disabled");
+        }
+        let _ = RegCloseKey(hkey);
+    }
+}
+
+/// 安装 panic hook：将崩溃信息写入 %TEMP%/panon_crash.txt
+fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let msg = format!("[{}] Panon crash: {}\n", timestamp, info);
+        eprintln!("{}", msg);
+        let crash_path = std::env::temp_dir().join("panon_crash.txt");
+        let _ = std::fs::write(crash_path, &msg);
+    }));
+}
+
 fn main() {
+    // 0. 单实例检查 + panic hook（在任何其他操作之前）
+    single_instance_check();
+    setup_panic_hook();
+
     // DPI 感知：防御性设置（清单未生效时的兜底），确保 overlay 坐标不被 Windows 虚拟化
     unsafe {
         use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
         let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     }
 
-    println!("=== Panon.Windows (Rust) — Phase 7: Settings Window (egui) ===");
+    println!("=== Panon.Windows (Rust) — Phase 8: Persistence + Full Integration ===");
+
+    // 0.5. 加载持久化设置
+    let initial_settings = AppSettings::load();
+
+    // 0.6. 透明效果管理器（快照原始值，退出时恢复）
+    let transparency = TransparencyManager::new();
+    transparency.apply(
+        initial_settings.enable_transparency,
+        initial_settings.use_oled_taskbar_transparency,
+    );
+
+    // 0.7. 开机自启
+    set_startup(initial_settings.startup);
 
     // 1. 获取所有任务栏（主 + 副显示器）
     let taskbars = get_all_taskbars();
@@ -100,11 +199,10 @@ fn main() {
     }
 
     // 共享设置状态（设置窗口写入，主循环读取）
-    // 阶段 8 起从 %APPDATA%/Panon/settings.json 加载
-    let settings = Arc::new(Mutex::new(AppSettings::default()));
+    let settings = Arc::new(Mutex::new(initial_settings));
     let settings_window_open = Arc::new(Mutex::new(false));
 
-    // 应用初始设置到所有 overlay
+    // 应用初始设置到所有 overlay + FFT
     {
         let s = settings.lock().unwrap();
         for overlay in &mut overlays {
@@ -171,6 +269,16 @@ fn main() {
     let mut exiting = false;
     let mut exit_start = Instant::now();
     let mut paused = false;
+
+    // 跟踪透明效果/开机自启变更（检测到变更时写注册表 + 保存 JSON）
+    let mut last_transparency = {
+        let s = settings.lock().unwrap();
+        (s.enable_transparency, s.use_oled_taskbar_transparency)
+    };
+    let mut last_startup = {
+        let s = settings.lock().unwrap();
+        s.startup
+    };
 
     loop {
         // 处理窗口消息
@@ -247,6 +355,9 @@ fn main() {
 
             if decay.is_exit_complete() || exit_start.elapsed() > exit_timeout {
                 println!("[exit] decay complete, exiting");
+                // 保存设置 + 恢复透明效果注册表值
+                settings.lock().unwrap().save();
+                transparency.restore();
                 return;
             }
 
@@ -265,6 +376,7 @@ fn main() {
         }
 
         // 应用设置到 FFT + 所有 overlay（每帧同步，设置窗口修改即时生效）
+        // 同时检测透明效果/开机自启变更
         {
             let s = settings.lock().unwrap();
             fft.set_bass_resolution_level(s.bass_resolution_level);
@@ -273,6 +385,23 @@ fn main() {
             render_interval = Duration::from_millis(1000 / fps);
             for overlay in &mut overlays {
                 apply_settings_to_renderer(&mut overlay.renderer, &s);
+            }
+
+            // 透明效果变更 → 写注册表 + 保存 JSON
+            let cur_t = (s.enable_transparency, s.use_oled_taskbar_transparency);
+            if cur_t != last_transparency {
+                transparency.apply(cur_t.0, cur_t.1);
+                last_transparency = cur_t;
+                s.save();
+                println!("[settings] transparency changed, saved");
+            }
+
+            // 开机自启变更 → 写注册表 + 保存 JSON
+            if s.startup != last_startup {
+                set_startup(s.startup);
+                last_startup = s.startup;
+                s.save();
+                println!("[settings] startup changed, saved");
             }
         }
 

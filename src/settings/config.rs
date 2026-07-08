@@ -1,14 +1,17 @@
 // config.rs — AppSettings 模型 + JSON 读写（← AppSettings.cs + SettingsManager.cs）
-// 阶段 7：基础结构（serde 持久化 + 字段验证在阶段 8 实现）
+// 阶段 8：serde 持久化 + 字段验证
+
+use std::fs;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 /// 应用设置（主循环与设置窗口共享）
 ///
-/// 字段分组（对齐 C# SettingsPage.xaml 的四个卡片）：
-/// - 音频：bass_resolution_level / reduce_bass
-/// - 显示：visual_effect / gravity / inversion / fps / bar_width / gap_width / fill_mode / target_monitor
-/// - 颜色：color_space_hsluv + hsl_* + hsluv_*
-/// - Windows：startup / enable_transparency / use_oled_taskbar_transparency（阶段 8 完整接线）
-#[derive(Clone, Debug)]
+/// 序列化为 `%APPDATA%/Panon/settings.json`，camelCase 对齐 C#。
+/// 加载时缺失字段用 Default 填充，加载后自动 validate() 修正非法值。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     // === 音频 ===
     /// 低音分辨率级别 (0-6)
@@ -46,7 +49,7 @@ pub struct AppSettings {
     pub hsluv_saturation: i32,
     pub hsluv_lightness: i32,
 
-    // === Windows 设置（阶段 8 接线注册表/启动项）===
+    // === Windows 设置 ===
     /// 开机自启
     pub startup: bool,
     /// 系统透明效果（注册表 EnableTransparency）
@@ -81,6 +84,105 @@ impl Default for AppSettings {
             startup: false,
             enable_transparency: false,
             use_oled_taskbar_transparency: false,
+        }
+    }
+}
+
+/// 合法的视觉效果名称
+const VALID_EFFECTS: &[&str] = &[
+    "bar1ch",
+    "wave",
+    "solid1ch",
+    "solid",
+    "beam",
+    "spectrogram",
+    "oie1ch",
+];
+
+impl AppSettings {
+    /// 修正非法字段值（加载后或用户误编辑后调用）
+    pub fn validate(&mut self) {
+        self.bass_resolution_level = self.bass_resolution_level.min(6);
+        self.gravity = self.gravity.min(4);
+        self.fps = self.fps.clamp(10, 60);
+        self.bar_width = self.bar_width.clamp(1, 20);
+        self.gap_width = self.gap_width.clamp(0, 10);
+        self.fill_mode = if self.fill_mode > 1 { 0 } else { self.fill_mode };
+        if self.target_monitor < -1 {
+            self.target_monitor = -1;
+        }
+        self.hsl_hue_from = self.hsl_hue_from.clamp(-360, 720);
+        self.hsl_hue_to = self.hsl_hue_to.clamp(-360, 720);
+        self.hsl_saturation = self.hsl_saturation.clamp(0, 100);
+        self.hsl_lightness = self.hsl_lightness.clamp(0, 100);
+        self.hsluv_hue_from = self.hsluv_hue_from.clamp(-360, 720);
+        self.hsluv_hue_to = self.hsluv_hue_to.clamp(-360, 720);
+        self.hsluv_saturation = self.hsluv_saturation.clamp(0, 100);
+        self.hsluv_lightness = self.hsluv_lightness.clamp(0, 100);
+        if !VALID_EFFECTS.contains(&self.visual_effect.as_str()) {
+            self.visual_effect = "bar1ch".to_string();
+        }
+    }
+
+    /// 设置文件路径: %APPDATA%/Panon/settings.json
+    fn settings_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("Panon").join("settings.json"))
+    }
+
+    /// 从 JSON 加载设置；文件不存在或解析失败时返回 Default
+    pub fn load() -> Self {
+        let path = match Self::settings_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("[settings] cannot resolve config dir, using defaults");
+                return Self::default();
+            }
+        };
+
+        match fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<AppSettings>(&json) {
+                Ok(mut s) => {
+                    s.validate();
+                    println!("[settings] loaded from {:?}", path);
+                    s
+                }
+                Err(e) => {
+                    eprintln!("[settings] parse error: {}, using defaults", e);
+                    Self::default()
+                }
+            },
+            Err(_) => {
+                // 文件不存在是正常情况（首次运行）
+                Self::default()
+            }
+        }
+    }
+
+    /// 保存设置到 JSON；失败时打印错误但不中断
+    pub fn save(&self) {
+        let path = match Self::settings_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("[settings] cannot resolve config dir, skip save");
+                return;
+            }
+        };
+
+        // 确保父目录存在
+        if let Some(parent) = path.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("[settings] create_dir_all failed: {}", e);
+                return;
+            }
+        }
+
+        match serde_json::to_string_pretty(self) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&path, json) {
+                    eprintln!("[settings] write failed: {}", e);
+                }
+            }
+            Err(e) => eprintln!("[settings] serialize failed: {}", e),
         }
     }
 }

@@ -290,7 +290,7 @@ impl SettingsApp {
 
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("注：透明效果与开机自启在阶段 8 接线注册表")
+                egui::RichText::new("注：透明效果修改系统注册表，退出时自动还原")
                     .small()
                     .color(egui::Color32::GRAY),
             );
