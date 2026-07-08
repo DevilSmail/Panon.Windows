@@ -1,5 +1,5 @@
 // panon.windows — Rust 原生版入口
-// 阶段 3：音频捕获 + FFT + 衰减处理 + 任务栏频谱渲染
+// 阶段 5：多显示器 + UIA 空白区域 + FillMode 双模式
 
 mod app;
 mod audio;
@@ -13,6 +13,7 @@ mod ui;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
@@ -22,50 +23,67 @@ use audio::decay::DecayProcessor;
 use audio::fft::FftProcessor;
 use audio::spectrum::SpectrumData;
 use overlay::window::OverlayWindow;
-use taskbar::detect::get_taskbar_info;
+use taskbar::detect::get_all_taskbars;
 
 fn main() {
     // DPI 感知：防御性设置（清单未生效时的兜底），确保 overlay 坐标不被 Windows 虚拟化
     unsafe {
-        use windows::Win32::UI::HiDpi::{
-            SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE,
-        };
+        use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE};
         let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     }
 
-    println!("=== Panon.Windows (Rust) — Phase 2: Taskbar Spectrum ===");
+    println!("=== Panon.Windows (Rust) — Phase 5: Multi-Monitor + UIA ===");
 
-    // 1. 获取任务栏信息
-    let taskbar = get_taskbar_info();
-    if taskbar.width <= 0 || taskbar.height <= 0 {
-        eprintln!("Failed to detect taskbar dimensions");
+    // 1. 获取所有任务栏（主 + 副显示器）
+    let taskbars = get_all_taskbars();
+    if taskbars.is_empty() {
+        eprintln!("Failed to detect any taskbar");
         std::process::exit(1);
     }
-    println!(
-        "Taskbar: {}x{} at ({},{}) pos={:?}",
-        taskbar.width, taskbar.height, taskbar.x, taskbar.y, taskbar.position
-    );
+    println!("Detected {} taskbar(s):", taskbars.len());
+    for (i, tb) in taskbars.iter().enumerate() {
+        println!(
+            "  [{}] {}x{} at ({},{}) pos={:?} primary={}",
+            i, tb.width, tb.height, tb.x, tb.y, tb.position, tb.is_primary
+        );
+    }
 
-    // 2. 创建覆盖窗口
-    let mut overlay = match OverlayWindow::create(&taskbar) {
-        Ok(o) => {
-            println!(
-                "Overlay window created: {}x{}",
-                o.width(),
-                o.height()
-            );
-            o
+    // 2. 为每个任务栏创建独立覆盖窗口
+    let mut overlays: Vec<OverlayWindow> = Vec::new();
+    for tb in &taskbars {
+        match OverlayWindow::create(tb) {
+            Ok(o) => {
+                println!(
+                    "Overlay [{}] created: {}x{} at ({},{})",
+                    overlays.len(),
+                    o.width(),
+                    o.height(),
+                    tb.x,
+                    tb.y
+                );
+                overlays.push(o);
+            }
+            Err(e) => {
+                eprintln!("Failed to create overlay for taskbar {:?}: {}", tb, e);
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to create overlay window: {}", e);
-            std::process::exit(1);
-        }
-    };
+    }
+    if overlays.is_empty() {
+        eprintln!("No overlay window created, exiting");
+        std::process::exit(1);
+    }
+
+    // FillMode: 0=铺满整个任务栏, 1=仅在空白区域显示（UIA 探测按钮间隙）
+    // 阶段 6 起可通过托盘菜单切换；阶段 8 起从 settings.json 读取
+    let fill_mode: u8 = 0;
+    for overlay in &mut overlays {
+        overlay.renderer.fill_mode = fill_mode;
+    }
 
     // 维护 Z-order：Above 模式（频谱覆盖 taskbar，柱子间透明可看到 taskbar）
-    let taskbar_hwnd = windows::Win32::Foundation::HWND(taskbar.hwnd as *mut _);
-    unsafe {
-        overlay.ensure_z_order(taskbar_hwnd, 2);
+    for overlay in &overlays {
+        let taskbar_hwnd = HWND(overlay.taskbar().hwnd as *mut _);
+        unsafe { overlay.ensure_z_order(taskbar_hwnd, 2); }
     }
 
     // 3. 启动音频捕获
@@ -125,8 +143,8 @@ fn main() {
         if exiting {
             let silent = SpectrumData::default();
             let decayed = decay.process(&silent);
-            unsafe {
-                overlay.render(&decayed.left_channel, &decayed.right_channel);
+            for overlay in &mut overlays {
+                unsafe { overlay.render(&decayed.left_channel, &decayed.right_channel); }
             }
 
             if decay.is_exit_complete() || exit_start.elapsed() > exit_timeout {
@@ -164,10 +182,15 @@ fn main() {
                 last_spectrum.clone()
             };
 
-            // 应用衰减后渲染
+            // 应用衰减后渲染到所有 overlay
             let decayed = decay.process(&spectrum);
-            unsafe {
-                overlay.render(&decayed.left_channel, &decayed.right_channel);
+            for overlay in &mut overlays {
+                // FillMode=1: 更新空白区域（UIA 探测，含 500ms 缓存）
+                if overlay.renderer.fill_mode == 1 {
+                    let min_bw = overlay.renderer.bar_width + overlay.renderer.gap_width;
+                    overlay.update_free_regions(min_bw);
+                }
+                unsafe { overlay.render(&decayed.left_channel, &decayed.right_channel); }
             }
             last_render = Instant::now();
             frame_count += 1;
@@ -175,8 +198,9 @@ fn main() {
 
         // 定期维护 Z-order（每 2 秒）
         if last_z_order.elapsed() >= z_order_interval {
-            unsafe {
-                overlay.ensure_z_order(taskbar_hwnd, 2);
+            for overlay in &overlays {
+                let taskbar_hwnd = HWND(overlay.taskbar().hwnd as *mut _);
+                unsafe { overlay.ensure_z_order(taskbar_hwnd, 2); }
             }
             last_z_order = Instant::now();
         }
@@ -187,8 +211,13 @@ fn main() {
             let vol = last_spectrum.volume;
             let idle = last_spectrum_time.elapsed() > idle_timeout;
             println!(
-                "[debug] frames={} bars={} vol={:.4} idle={} {:?}",
-                frame_count, bars, vol, idle, if idle { "silent" } else { "active" }
+                "[debug] frames={} overlays={} bars={} vol={:.4} idle={} {:?}",
+                frame_count,
+                overlays.len(),
+                bars,
+                vol,
+                idle,
+                if idle { "silent" } else { "active" }
             );
             last_debug = Instant::now();
         }

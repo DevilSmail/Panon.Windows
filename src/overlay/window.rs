@@ -35,6 +35,8 @@ pub struct OverlayWindow {
     width: i32,
     height: i32,
     pub renderer: SpectrumRenderer,
+    /// 关联的任务栏信息（用于 UIA 探测和 Z-order 维护）
+    taskbar: TaskbarInfo,
 }
 
 impl OverlayWindow {
@@ -133,8 +135,21 @@ impl OverlayWindow {
                 width,
                 height,
                 renderer: SpectrumRenderer::new(),
+                taskbar: taskbar.clone(),
             })
         }
+    }
+
+    /// 更新空白区域（FillMode=1 时由主循环定期调用）
+    /// min_bar_width: 最小可用间隙宽度（通常 = bar_width + gap_width）
+    pub fn update_free_regions(&mut self, min_bar_width: i32) {
+        let regions = crate::taskbar::uia::get_free_regions(&self.taskbar, min_bar_width);
+        self.renderer.free_regions = Some(regions);
+    }
+
+    /// 获取关联的任务栏信息
+    pub fn taskbar(&self) -> &TaskbarInfo {
+        &self.taskbar
     }
 
     /// 渲染一帧到 DIB 并更新分层窗口
