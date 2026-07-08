@@ -4,4 +4,5 @@ fn main() {
     embed_resource::compile("assets/panon.rc", embed_resource::NONE);
     println!("cargo:rerun-if-changed=assets/panon.rc");
     println!("cargo:rerun-if-changed=assets/panon.ico");
+    println!("cargo:rerun-if-changed=assets/app.manifest");
 }

@@ -144,7 +144,9 @@ impl OverlayWindow {
         }
         self.renderer
             .render_to_pixels(left, right, self.p_bits, self.width, self.height);
-        let _ = self.update_layered_window();
+        if let Err(e) = self.update_layered_window() {
+            eprintln!("[error] UpdateLayeredWindow failed: {}", e);
+        }
     }
 
     unsafe fn update_layered_window(&self) -> windows::core::Result<()> {

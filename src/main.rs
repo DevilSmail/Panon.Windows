@@ -24,6 +24,14 @@ use overlay::window::OverlayWindow;
 use taskbar::detect::get_taskbar_info;
 
 fn main() {
+    // DPI 感知：防御性设置（清单未生效时的兜底），确保 overlay 坐标不被 Windows 虚拟化
+    unsafe {
+        use windows::Win32::UI::HiDpi::{
+            SetProcessDpiAwareness, PROCESS_PER_MONITOR_DPI_AWARE,
+        };
+        let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    }
+
     println!("=== Panon.Windows (Rust) — Phase 2: Taskbar Spectrum ===");
 
     // 1. 获取任务栏信息
@@ -53,10 +61,10 @@ fn main() {
         }
     };
 
-    // 维护 Z-order：Under 模式（taskbar 覆盖频谱，柱子上半部分可见）
+    // 维护 Z-order：Above 模式（频谱覆盖 taskbar，柱子间透明可看到 taskbar）
+    let taskbar_hwnd = windows::Win32::Foundation::HWND(taskbar.hwnd as *mut _);
     unsafe {
-        let taskbar_hwnd = windows::Win32::Foundation::HWND(taskbar.hwnd as *mut _);
-        overlay.ensure_z_order(taskbar_hwnd, 1);
+        overlay.ensure_z_order(taskbar_hwnd, 2);
     }
 
     // 3. 启动音频捕获
@@ -84,9 +92,13 @@ fn main() {
     let mut last_spectrum = SpectrumData::default();
     let mut last_spectrum_time = Instant::now();
     let mut last_render = Instant::now();
+    let mut last_z_order = Instant::now();
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     let render_interval = Duration::from_millis(33); // ~30 FPS
     let idle_timeout = Duration::from_millis(200);
+    let z_order_interval = Duration::from_secs(2);
+    let mut frame_count = 0u64;
+    let mut last_debug = Instant::now();
 
     loop {
         // 处理窗口消息
@@ -131,6 +143,27 @@ fn main() {
                 overlay.render(&spectrum.left_channel, &spectrum.right_channel);
             }
             last_render = Instant::now();
+            frame_count += 1;
+        }
+
+        // 定期维护 Z-order（每 2 秒）
+        if last_z_order.elapsed() >= z_order_interval {
+            unsafe {
+                overlay.ensure_z_order(taskbar_hwnd, 2);
+            }
+            last_z_order = Instant::now();
+        }
+
+        // 调试输出（每 3 秒）
+        if last_debug.elapsed() >= Duration::from_secs(3) {
+            let bars = last_spectrum.left_channel.len();
+            let vol = last_spectrum.volume;
+            let idle = last_spectrum_time.elapsed() > idle_timeout;
+            println!(
+                "[debug] frames={} bars={} vol={:.4} idle={} {:?}",
+                frame_count, bars, vol, idle, if idle { "silent" } else { "active" }
+            );
+            last_debug = Instant::now();
         }
 
         // 避免忙等

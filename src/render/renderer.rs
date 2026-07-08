@@ -110,12 +110,17 @@ impl SpectrumRenderer {
         width: i32,
         height: i32,
     ) {
-        if pixels.is_null() || left.is_empty() || width <= 0 || height <= 0 {
+        if pixels.is_null() || width <= 0 || height <= 0 {
             return;
         }
 
+        // 先清零（全透明），即使频谱为空也能正确显示透明窗口
         let total = (width * height) as usize;
         std::ptr::write_bytes(pixels as *mut u8, 0, total * 4);
+
+        if left.is_empty() {
+            return;
+        }
 
         match self.visual_effect {
             VisualEffect::Bar1ch => self.render_bar1ch(left, right, pixels, width, height),
