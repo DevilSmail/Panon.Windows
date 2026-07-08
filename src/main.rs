@@ -1,5 +1,5 @@
 // panon.windows — Rust 原生版入口
-// 阶段 6：系统托盘图标 + 右键菜单 + Explorer 重启恢复
+// 阶段 7：设置窗口 UI (egui) + 共享状态
 
 mod app;
 mod audio;
@@ -11,6 +11,7 @@ mod tray;
 mod ui;
 
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HWND;
@@ -23,9 +24,31 @@ use audio::decay::DecayProcessor;
 use audio::fft::FftProcessor;
 use audio::spectrum::SpectrumData;
 use overlay::window::OverlayWindow;
+use render::renderer::{SpectrumRenderer, VisualEffect};
+use settings::config::AppSettings;
 use taskbar::detect::get_all_taskbars;
 use tray::TrayAction;
 use tray::icon::TrayIcon;
+use ui::settings_window::run_settings_window;
+
+/// 将 AppSettings 应用到渲染器（每帧调用，开销可忽略）
+fn apply_settings_to_renderer(r: &mut SpectrumRenderer, s: &AppSettings) {
+    r.visual_effect = VisualEffect::from_name(&s.visual_effect);
+    r.gravity = s.gravity;
+    r.inversion = s.inversion;
+    r.color_space_hsluv = s.color_space_hsluv;
+    r.hsl_hue_from = s.hsl_hue_from;
+    r.hsl_hue_to = s.hsl_hue_to;
+    r.hsl_saturation = s.hsl_saturation;
+    r.hsl_lightness = s.hsl_lightness;
+    r.hsluv_hue_from = s.hsluv_hue_from;
+    r.hsluv_hue_to = s.hsluv_hue_to;
+    r.hsluv_saturation = s.hsluv_saturation;
+    r.hsluv_lightness = s.hsluv_lightness;
+    r.bar_width = s.bar_width;
+    r.gap_width = s.gap_width;
+    r.fill_mode = s.fill_mode;
+}
 
 fn main() {
     // DPI 感知：防御性设置（清单未生效时的兜底），确保 overlay 坐标不被 Windows 虚拟化
@@ -34,7 +57,7 @@ fn main() {
         let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     }
 
-    println!("=== Panon.Windows (Rust) — Phase 6: Tray Icon + Context Menu ===");
+    println!("=== Panon.Windows (Rust) — Phase 7: Settings Window (egui) ===");
 
     // 1. 获取所有任务栏（主 + 副显示器）
     let taskbars = get_all_taskbars();
@@ -49,6 +72,7 @@ fn main() {
             i, tb.width, tb.height, tb.x, tb.y, tb.position, tb.is_primary
         );
     }
+    let monitor_count = taskbars.len();
 
     // 2. 为每个任务栏创建独立覆盖窗口
     let mut overlays: Vec<OverlayWindow> = Vec::new();
@@ -75,11 +99,17 @@ fn main() {
         std::process::exit(1);
     }
 
-    // FillMode: 0=铺满整个任务栏, 1=仅在空白区域显示（UIA 探测按钮间隙）
-    // 阶段 6 起可通过托盘菜单切换；阶段 8 起从 settings.json 读取
-    let fill_mode: u8 = 0;
-    for overlay in &mut overlays {
-        overlay.renderer.fill_mode = fill_mode;
+    // 共享设置状态（设置窗口写入，主循环读取）
+    // 阶段 8 起从 %APPDATA%/Panon/settings.json 加载
+    let settings = Arc::new(Mutex::new(AppSettings::default()));
+    let settings_window_open = Arc::new(Mutex::new(false));
+
+    // 应用初始设置到所有 overlay
+    {
+        let s = settings.lock().unwrap();
+        for overlay in &mut overlays {
+            apply_settings_to_renderer(&mut overlay.renderer, &s);
+        }
     }
 
     // 维护 Z-order：Above 模式（频谱覆盖 taskbar，柱子间透明可看到 taskbar）
@@ -104,10 +134,13 @@ fn main() {
     println!("Press Ctrl+C to exit");
     println!();
 
-    // 4. FFT 处理器 + 衰减处理器
+    // 4. FFT 处理器 + 衰减处理器（应用初始设置）
     let mut fft = FftProcessor::new();
-    fft.set_bass_resolution_level(4);
-    fft.set_reduce_bass(true);
+    {
+        let s = settings.lock().unwrap();
+        fft.set_bass_resolution_level(s.bass_resolution_level);
+        fft.set_reduce_bass(s.reduce_bass);
+    }
     let mut decay = DecayProcessor::new();
 
     // 4.5. 创建系统托盘图标（接收托盘动作通过 channel）
@@ -129,7 +162,7 @@ fn main() {
     let mut last_render = Instant::now();
     let mut last_z_order = Instant::now();
     let mut msg: MSG = unsafe { std::mem::zeroed() };
-    let render_interval = Duration::from_millis(33); // ~30 FPS
+    let mut render_interval = Duration::from_millis(33); // 由 settings.fps 动态更新
     let idle_timeout = Duration::from_millis(200);
     let z_order_interval = Duration::from_secs(2);
     let exit_timeout = Duration::from_millis(800);
@@ -163,7 +196,18 @@ fn main() {
                     println!("[tray] {}", if paused { "Paused" } else { "Resumed" });
                 }
                 TrayAction::ShowSettings => {
-                    println!("[tray] Settings (not implemented yet)");
+                    let mut open = settings_window_open.lock().unwrap();
+                    if !*open {
+                        *open = true;
+                        run_settings_window(
+                            settings.clone(),
+                            monitor_count,
+                            settings_window_open.clone(),
+                        );
+                        println!("[tray] Opening settings window");
+                    } else {
+                        println!("[tray] Settings window already open");
+                    }
                 }
                 TrayAction::Exit => {
                     exiting = true;
@@ -180,9 +224,10 @@ fn main() {
                         while PeekMessageW(&mut msg, None, WM_QUIT, WM_QUIT, PM_REMOVE).as_bool() {}
                     }
                     let new_taskbars = get_all_taskbars();
+                    let s = settings.lock().unwrap();
                     for tb in &new_taskbars {
                         if let Ok(mut o) = OverlayWindow::create(tb) {
-                            o.renderer.fill_mode = fill_mode;
+                            apply_settings_to_renderer(&mut o.renderer, &s);
                             let taskbar_hwnd = HWND(o.taskbar().hwnd as *mut _);
                             unsafe { o.ensure_z_order(taskbar_hwnd, 2); }
                             overlays.push(o);
@@ -219,7 +264,19 @@ fn main() {
             }
         }
 
-        // 30 FPS 渲染
+        // 应用设置到 FFT + 所有 overlay（每帧同步，设置窗口修改即时生效）
+        {
+            let s = settings.lock().unwrap();
+            fft.set_bass_resolution_level(s.bass_resolution_level);
+            fft.set_reduce_bass(s.reduce_bass);
+            let fps = s.fps.max(1) as u64;
+            render_interval = Duration::from_millis(1000 / fps);
+            for overlay in &mut overlays {
+                apply_settings_to_renderer(&mut overlay.renderer, &s);
+            }
+        }
+
+        // 渲染（由 settings.fps 控制帧率）
         if last_render.elapsed() >= render_interval {
             let spectrum = if paused {
                 // 暂停：零值频谱（衰减自然回落到零）

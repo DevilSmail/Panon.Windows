@@ -32,11 +32,9 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
 ] }
 
-# 设置窗口 GUI（阶段 7 起使用，提前声明）
-egui = "0.29"
-egui-wgpu = "0.29"
-egui-winit = "0.29"
-winit = "0.30"
+# 设置窗口 GUI（阶段 7 起使用）
+# eframe 已内含 egui/egui-winit/egui-wgpu，统一由 eframe 管理版本
+eframe = "0.29"
 wgpu = { version = "22", features = ["angle"] }
 
 # JSON 配置
