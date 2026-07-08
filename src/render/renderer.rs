@@ -140,6 +140,18 @@ impl SpectrumRenderer {
     pub fn cleanup(&mut self) {
         self.spectrogram_buf.clear();
     }
+
+    /// 应用预设配色
+    pub fn apply_preset(&mut self, preset: &crate::render::presets::ColorPreset) {
+        self.hsl_hue_from = preset.hsl_hue_from;
+        self.hsl_hue_to = preset.hsl_hue_to;
+        self.hsl_saturation = preset.hsl_saturation;
+        self.hsl_lightness = preset.hsl_lightness;
+        self.hsluv_hue_from = preset.hsluv_hue_from;
+        self.hsluv_hue_to = preset.hsluv_hue_to;
+        self.hsluv_saturation = preset.hsluv_saturation;
+        self.hsluv_lightness = preset.hsluv_lightness;
+    }
 }
 
 impl Default for SpectrumRenderer {
