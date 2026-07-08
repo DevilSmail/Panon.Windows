@@ -152,6 +152,17 @@ impl OverlayWindow {
         &self.taskbar
     }
 
+    /// 诊断：填充整个 overlay 为纯色（确认窗口位置和 UpdateLayeredWindow 正常）
+    pub unsafe fn fill_solid(&mut self, r: u8, g: u8, b: u8) {
+        if self.p_bits.is_null() {
+            return;
+        }
+        let total = (self.width * self.height) as usize;
+        let color = ((255u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+        std::slice::from_raw_parts_mut(self.p_bits, total).fill(color);
+        let _ = self.update_layered_window();
+    }
+
     /// 渲染一帧到 DIB 并更新分层窗口
     pub unsafe fn render(&mut self, left: &[f32], right: &[f32]) {
         if self.p_bits.is_null() {
@@ -229,6 +240,12 @@ impl OverlayWindow {
         self.height
     }
 }
+
+// 安全：OverlayWindow 持有的原始指针（DIB、HDC、HWND）在创建后不变且不移动，
+// UpdateLayeredWindow 可以从任意线程调用（MSDN 明确声明）。
+// 渲染线程独占访问这些资源，主线程仅在创建/销毁时访问。
+unsafe impl Send for OverlayWindow {}
+unsafe impl Sync for OverlayWindow {}
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {

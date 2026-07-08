@@ -162,7 +162,7 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
         // lParam 包含鼠标消息
         match lp.0 as u32 {
             WM_LBUTTONUP => {
-                send_action(TrayAction::TogglePause);
+                send_action(TrayAction::ShowSettings);
                 return LRESULT(0);
             }
             WM_RBUTTONUP => {

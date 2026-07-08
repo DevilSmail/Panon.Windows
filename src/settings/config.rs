@@ -50,6 +50,10 @@ pub struct AppSettings {
     pub hsluv_lightness: i32,
 
     // === Windows 设置 ===
+    /// 覆盖模式: 1=任务栏在上(默认), 2=频谱在上
+    pub overlay_mode: u8,
+    /// 频谱窗口最大高度（像素），0=自动跟随任务栏高度
+    pub max_height: u8,
     /// 开机自启
     pub startup: bool,
     /// 系统透明效果（注册表 EnableTransparency）
@@ -81,6 +85,8 @@ impl Default for AppSettings {
             hsluv_hue_to: -270,
             hsluv_saturation: 100,
             hsluv_lightness: 50,
+            overlay_mode: 1,
+            max_height: 0,
             startup: false,
             enable_transparency: false,
             use_oled_taskbar_transparency: false,

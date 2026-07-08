@@ -4,23 +4,16 @@
 /// 预设配色方案
 #[derive(Clone, Debug)]
 pub struct ColorPreset {
-    /// 预设名称
     pub name: &'static str,
-    /// HSL 色相起点
+    /// 色彩空间: false=HSL, true=HSLuv
+    pub use_hsluv: bool,
     pub hsl_hue_from: i32,
-    /// HSL 色相终点
     pub hsl_hue_to: i32,
-    /// HSL 饱和度
     pub hsl_saturation: i32,
-    /// HSL 亮度
     pub hsl_lightness: i32,
-    /// HSLuv 色相起点
     pub hsluv_hue_from: i32,
-    /// HSLuv 色相终点
     pub hsluv_hue_to: i32,
-    /// HSLuv 饱和度
     pub hsluv_saturation: i32,
-    /// HSLuv 亮度
     pub hsluv_lightness: i32,
 }
 
@@ -28,6 +21,7 @@ pub struct ColorPreset {
 pub static PRESETS: &[ColorPreset] = &[
     // 0: 彩虹 — 完整色环循环
     ColorPreset {
+        use_hsluv: false,
         name: "彩虹",
         hsl_hue_from: 0,
         hsl_hue_to: 360,
@@ -40,6 +34,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 1: 霓虹 — 高饱和度蓝→红循环
     ColorPreset {
+        use_hsluv: true,
         name: "霓虹",
         hsl_hue_from: 180,
         hsl_hue_to: 720,
@@ -52,6 +47,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 2: 极光 — 绿→蓝→紫
     ColorPreset {
+        use_hsluv: true,
         name: "极光",
         hsl_hue_from: 120,
         hsl_hue_to: 300,
@@ -64,6 +60,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 3: 日落 — 红→橙→黄
     ColorPreset {
+        use_hsluv: false,
         name: "日落",
         hsl_hue_from: -20,
         hsl_hue_to: 60,
@@ -76,6 +73,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 4: 海洋 — 蓝→青→绿
     ColorPreset {
+        use_hsluv: false,
         name: "海洋",
         hsl_hue_from: 180,
         hsl_hue_to: 240,
@@ -88,6 +86,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 5: 火焰 — 红→橙→黄
     ColorPreset {
+        use_hsluv: false,
         name: "火焰",
         hsl_hue_from: 0,
         hsl_hue_to: 50,
@@ -100,6 +99,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 6: 森林 — 绿→黄绿
     ColorPreset {
+        use_hsluv: false,
         name: "森林",
         hsl_hue_from: 60,
         hsl_hue_to: 140,
@@ -112,6 +112,7 @@ pub static PRESETS: &[ColorPreset] = &[
     },
     // 7: 紫罗兰 — 紫→粉
     ColorPreset {
+        use_hsluv: true,
         name: "紫罗兰",
         hsl_hue_from: 240,
         hsl_hue_to: 320,
@@ -135,17 +136,13 @@ pub fn preset_names() -> Vec<&'static str> {
 /// 根据当前颜色参数匹配预设索引（智能匹配）
 /// 返回 None 表示不匹配任何预设（自定义配色）
 pub fn match_preset(
-    hsl_hue_from: i32,
-    hsl_hue_to: i32,
-    hsl_saturation: i32,
-    hsl_lightness: i32,
-    hsluv_hue_from: i32,
-    hsluv_hue_to: i32,
-    hsluv_saturation: i32,
-    hsluv_lightness: i32,
+    hsl_hue_from: i32, hsl_hue_to: i32, hsl_saturation: i32, hsl_lightness: i32,
+    hsluv_hue_from: i32, hsluv_hue_to: i32, hsluv_saturation: i32, hsluv_lightness: i32,
+    color_space_hsluv: bool,
 ) -> Option<usize> {
     for (i, preset) in PRESETS.iter().enumerate() {
-        if preset.hsl_hue_from == hsl_hue_from
+        if preset.use_hsluv == color_space_hsluv
+            && preset.hsl_hue_from == hsl_hue_from
             && preset.hsl_hue_to == hsl_hue_to
             && preset.hsl_saturation == hsl_saturation
             && preset.hsl_lightness == hsl_lightness
