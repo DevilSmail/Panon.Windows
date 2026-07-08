@@ -3,3 +3,11 @@
 
 pub mod icon;
 pub mod menu;
+
+#[derive(Clone, Copy, Debug)]
+pub enum TrayAction {
+    TogglePause,
+    ShowSettings,
+    Exit,
+    TaskbarRestart,
+}

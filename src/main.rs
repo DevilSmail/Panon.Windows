@@ -1,5 +1,5 @@
 // panon.windows — Rust 原生版入口
-// 阶段 5：多显示器 + UIA 空白区域 + FillMode 双模式
+// 阶段 6：系统托盘图标 + 右键菜单 + Explorer 重启恢复
 
 mod app;
 mod audio;
@@ -24,6 +24,8 @@ use audio::fft::FftProcessor;
 use audio::spectrum::SpectrumData;
 use overlay::window::OverlayWindow;
 use taskbar::detect::get_all_taskbars;
+use tray::TrayAction;
+use tray::icon::TrayIcon;
 
 fn main() {
     // DPI 感知：防御性设置（清单未生效时的兜底），确保 overlay 坐标不被 Windows 虚拟化
@@ -32,7 +34,7 @@ fn main() {
         let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     }
 
-    println!("=== Panon.Windows (Rust) — Phase 5: Multi-Monitor + UIA ===");
+    println!("=== Panon.Windows (Rust) — Phase 6: Tray Icon + Context Menu ===");
 
     // 1. 获取所有任务栏（主 + 副显示器）
     let taskbars = get_all_taskbars();
@@ -108,6 +110,19 @@ fn main() {
     fft.set_reduce_bass(true);
     let mut decay = DecayProcessor::new();
 
+    // 4.5. 创建系统托盘图标（接收托盘动作通过 channel）
+    let (action_tx, action_rx) = mpsc::channel();
+    let tray = match TrayIcon::create(action_tx) {
+        Ok(t) => {
+            println!("Tray icon created");
+            t
+        }
+        Err(e) => {
+            eprintln!("Tray icon creation failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     // 5. 主循环
     let mut last_spectrum = SpectrumData::default();
     let mut last_spectrum_time = Instant::now();
@@ -122,6 +137,7 @@ fn main() {
     let mut last_debug = Instant::now();
     let mut exiting = false;
     let mut exit_start = Instant::now();
+    let mut paused = false;
 
     loop {
         // 处理窗口消息
@@ -136,6 +152,43 @@ fn main() {
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+        }
+
+        // 处理托盘动作
+        while let Ok(action) = action_rx.try_recv() {
+            match action {
+                TrayAction::TogglePause => {
+                    paused = !paused;
+                    println!("[tray] {}", if paused { "Paused" } else { "Resumed" });
+                }
+                TrayAction::ShowSettings => {
+                    println!("[tray] Settings (not implemented yet)");
+                }
+                TrayAction::Exit => {
+                    exiting = true;
+                    exit_start = Instant::now();
+                    capture.stop();
+                    decay.force_exit();
+                }
+                TrayAction::TaskbarRestart => {
+                    println!("[tray] TaskbarCreated: re-adding icon and recreating overlays");
+                    tray.re_add();
+                    overlays.clear();
+                    // 排空因销毁旧 overlay 窗口产生的 WM_QUIT 消息
+                    unsafe {
+                        while PeekMessageW(&mut msg, None, WM_QUIT, WM_QUIT, PM_REMOVE).as_bool() {}
+                    }
+                    let new_taskbars = get_all_taskbars();
+                    for tb in &new_taskbars {
+                        if let Ok(mut o) = OverlayWindow::create(tb) {
+                            o.renderer.fill_mode = fill_mode;
+                            let taskbar_hwnd = HWND(o.taskbar().hwnd as *mut _);
+                            unsafe { o.ensure_z_order(taskbar_hwnd, 2); }
+                            overlays.push(o);
+                        }
+                    }
+                }
             }
         }
 
@@ -156,30 +209,37 @@ fn main() {
             continue;
         }
 
-        // 接收音频数据 → FFT
-        while let Ok(samples) = rx.try_recv() {
-            if !samples.is_empty() {
-                last_spectrum = fft.process(&samples, channels, sample_rate);
-                last_spectrum_time = Instant::now();
+        // 接收音频数据 → FFT（暂停时跳过，使用零值频谱）
+        if !paused {
+            while let Ok(samples) = rx.try_recv() {
+                if !samples.is_empty() {
+                    last_spectrum = fft.process(&samples, channels, sample_rate);
+                    last_spectrum_time = Instant::now();
+                }
             }
         }
 
         // 30 FPS 渲染
         if last_render.elapsed() >= render_interval {
-            let is_idle = last_spectrum_time.elapsed() > idle_timeout;
-            let spectrum = if is_idle {
-                // 静默：零值频谱（volume=0 触发 silence_factor 快速回落）
-                let mut s = last_spectrum.clone();
-                for v in &mut s.left_channel {
-                    *v = 0.0;
-                }
-                for v in &mut s.right_channel {
-                    *v = 0.0;
-                }
-                s.volume = 0.0;
-                s
+            let spectrum = if paused {
+                // 暂停：零值频谱（衰减自然回落到零）
+                SpectrumData::default()
             } else {
-                last_spectrum.clone()
+                let is_idle = last_spectrum_time.elapsed() > idle_timeout;
+                if is_idle {
+                    // 静默：零值频谱（volume=0 触发 silence_factor 快速回落）
+                    let mut s = last_spectrum.clone();
+                    for v in &mut s.left_channel {
+                        *v = 0.0;
+                    }
+                    for v in &mut s.right_channel {
+                        *v = 0.0;
+                    }
+                    s.volume = 0.0;
+                    s
+                } else {
+                    last_spectrum.clone()
+                }
             };
 
             // 应用衰减后渲染到所有 overlay
@@ -211,13 +271,14 @@ fn main() {
             let vol = last_spectrum.volume;
             let idle = last_spectrum_time.elapsed() > idle_timeout;
             println!(
-                "[debug] frames={} overlays={} bars={} vol={:.4} idle={} {:?}",
+                "[debug] frames={} overlays={} bars={} vol={:.4} idle={} paused={} {:?}",
                 frame_count,
                 overlays.len(),
                 bars,
                 vol,
                 idle,
-                if idle { "silent" } else { "active" }
+                paused,
+                if paused { "paused" } else if idle { "silent" } else { "active" }
             );
             last_debug = Instant::now();
         }
