@@ -1,5 +1,8 @@
 // panon.windows — Rust 原生版入口
-// 阶段 8：设置持久化 + 注册表透明效果 + 开机自启 + 单实例
+// 阶段 9：Release 优化 + 全功能集成
+
+// Release 构建隐藏控制台窗口（debug 构建保留以便查看日志输出）
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod audio;
@@ -143,7 +146,7 @@ fn main() {
         let _ = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     }
 
-    println!("=== Panon.Windows (Rust) — Phase 8: Persistence + Full Integration ===");
+    println!("=== Panon.Windows (Rust) — Phase 9: Release ===");
 
     // 0.5. 加载持久化设置
     let initial_settings = AppSettings::load();
