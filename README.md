@@ -54,7 +54,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 ### 便携版（普通用户）
 
-下载 `panon-windows.exe`，双击运行即可。首次启动自动在 `%APPDATA%\Panon\` 创建配置文件。
+下载 `panon.windows.exe`，双击运行即可。首次启动自动在 `%APPDATA%\Panon\` 创建配置文件。
 
 **系统要求：**
 - Windows 10 version 1809+ 或 Windows 11

@@ -108,6 +108,24 @@ fn random_color() -> (i32, i32, i32, i32) {
     (hf, ht, sat, light)
 }
 
+// ===== 窗口居中 =====
+
+/// 获取主显示器工作区 (left, top, width, height)，排除任务栏
+fn get_primary_work_area() -> (i32, i32, i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_GETWORKAREA, 0,
+            Some(&mut rect as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+}
+
 // ===== 主入口 =====
 
 pub fn run_settings_window(
@@ -211,6 +229,16 @@ pub fn run_settings_window(
 
     // 窗口图标通过 EXE 资源段（panon.rc）嵌入，Explorer/任务栏自动显示。
     // Slint 1.17 的 Window::icon 在 Windows 上不支持（已知限制）。
+
+    // 居中窗口到屏幕工作区（对齐 C# DisplayArea.WorkArea）
+    {
+        let (wx, wy, ww, wh) = get_primary_work_area();
+        let win_w = 720i32;
+        let win_h = 600i32;
+        let x = wx + (ww - win_w) / 2;
+        let y = wy + (wh - win_h) / 2;
+        window.window().set_position(slint::PhysicalPosition::new(x, y));
+    }
 
     // === 回调设置 ===
 
