@@ -1,15 +1,45 @@
 // config.rs — AppSettings 模型 + JSON 读写（← AppSettings.cs + SettingsManager.cs）
 // 阶段 8：serde 持久化 + 字段验证
+//
+// P0 修复：JSON 字段名对齐 C#
+// - visualEffectName (原 visualEffect，保留 alias 兼容旧配置)
+// - startWithWindows (原 startup，保留 alias 兼容旧配置)
+// - targetMonitor: String 类型 (对齐 C#)，支持整数和字符串双向兼容
 
 use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// targetMonitor 反序列化：兼容整数（旧配置）和字符串（C# 格式）
+fn deserialize_target_monitor<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct TargetMonitorVisitor;
+    impl<'de> serde::de::Visitor<'de> for TargetMonitorVisitor {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string like \"0\" or integer 0 for target monitor")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<String, E> {
+            Ok((v as i64).to_string())
+        }
+    }
+    deserializer.deserialize_any(TargetMonitorVisitor)
+}
+
 /// 应用设置（主循环与设置窗口共享）
 ///
 /// 序列化为 `%APPDATA%/Panon/settings.json`，camelCase 对齐 C#。
 /// 加载时缺失字段用 Default 填充，加载后自动 validate() 修正非法值。
+/// 旧字段名通过 serde alias 兼容。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
@@ -21,7 +51,8 @@ pub struct AppSettings {
 
     // === 显示 ===
     /// 视觉效果名称: bar1ch / wave / solid1ch / solid / beam / spectrogram / oie1ch
-    pub visual_effect: String,
+    #[serde(alias = "visualEffect")]
+    pub visual_effect_name: String,
     /// 重力级别 (0-4)
     pub gravity: u8,
     /// 反转频谱
@@ -34,8 +65,9 @@ pub struct AppSettings {
     pub gap_width: i32,
     /// 填充模式: 0=铺满, 1=仅空白区域
     pub fill_mode: u8,
-    /// 目标显示器: -1=所有, 0=主显示器, 1+=副显示器索引
-    pub target_monitor: i32,
+    /// 目标显示器: "-1"=所有, "0"=主显示器, "1"+=副显示器索引（对齐 C# string 类型）
+    #[serde(deserialize_with = "deserialize_target_monitor")]
+    pub target_monitor: String,
 
     // === 颜色 ===
     /// 色彩空间: false=HSL, true=HSLuv
@@ -52,34 +84,33 @@ pub struct AppSettings {
     // === Windows 设置 ===
     /// 覆盖模式: 1=任务栏在上(默认), 2=频谱在上
     pub overlay_mode: u8,
-    /// 频谱窗口最大高度（像素），0=自动跟随任务栏高度
-    pub max_height: u8,
-    /// 开机自启
-    pub startup: bool,
-    /// 系统透明效果（注册表 EnableTransparency）
+    /// 频谱窗口最大高度（像素），0=自动跟随任务栏高度（对齐 C# int MaxHeight）
+    pub max_height: i32,
+    /// 开机自启（对齐 C# StartWithWindows）
+    #[serde(alias = "startup")]
+    pub start_with_windows: bool,
+    /// 系统透明效果（注册表 EnableTransparency + UseOLEDTaskbarTransparency，对齐 C# 单开关）
     pub enable_transparency: bool,
-    /// OLED 任务栏透明（注册表 UseOLEDTaskbarTransparency）
-    pub use_oled_taskbar_transparency: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        // 默认值对齐 C# AppSettings.Default + SpectrumRenderer::new()
+        // 默认值对齐 C# AppSettings.Default
         Self {
             bass_resolution_level: 4,
             reduce_bass: true,
-            visual_effect: "bar1ch".to_string(),
+            visual_effect_name: "bar1ch".to_string(),
             gravity: 2,
             inversion: false,
             fps: 30,
             bar_width: 6,
             gap_width: 3,
-            fill_mode: 0,
-            target_monitor: -1,
+            fill_mode: 1,
+            target_monitor: "0".to_string(),
             color_space_hsluv: false,
             hsl_hue_from: 180,
             hsl_hue_to: 720,
-            hsl_saturation: 80,
+            hsl_saturation: 60,
             hsl_lightness: 50,
             hsluv_hue_from: 270,
             hsluv_hue_to: -270,
@@ -87,9 +118,8 @@ impl Default for AppSettings {
             hsluv_lightness: 50,
             overlay_mode: 1,
             max_height: 0,
-            startup: false,
+            start_with_windows: false,
             enable_transparency: false,
-            use_oled_taskbar_transparency: false,
         }
     }
 }
@@ -111,22 +141,26 @@ impl AppSettings {
         self.bass_resolution_level = self.bass_resolution_level.min(6);
         self.gravity = self.gravity.min(4);
         self.fps = self.fps.clamp(10, 60);
-        self.bar_width = self.bar_width.clamp(1, 20);
-        self.gap_width = self.gap_width.clamp(0, 10);
-        self.fill_mode = if self.fill_mode > 1 { 0 } else { self.fill_mode };
-        if self.target_monitor < -1 {
-            self.target_monitor = -1;
+        self.bar_width = self.bar_width.clamp(1, 30);
+        self.gap_width = self.gap_width.clamp(0, 20);
+        self.fill_mode = if self.fill_mode > 1 { 1 } else { self.fill_mode };
+        // 验证 target_monitor：必须是有效的数字字符串或 "-1"
+        if self.target_monitor != "-1" {
+            if self.target_monitor.parse::<i32>().is_err() {
+                self.target_monitor = "0".to_string();
+            }
         }
-        self.hsl_hue_from = self.hsl_hue_from.clamp(-360, 720);
-        self.hsl_hue_to = self.hsl_hue_to.clamp(-360, 720);
+        // UI sliders allow -4000..4000 for hue ranges; keep validate in sync
+        self.hsl_hue_from = self.hsl_hue_from.clamp(-4000, 4000);
+        self.hsl_hue_to = self.hsl_hue_to.clamp(-4000, 4000);
         self.hsl_saturation = self.hsl_saturation.clamp(0, 100);
         self.hsl_lightness = self.hsl_lightness.clamp(0, 100);
-        self.hsluv_hue_from = self.hsluv_hue_from.clamp(-360, 720);
-        self.hsluv_hue_to = self.hsluv_hue_to.clamp(-360, 720);
+        self.hsluv_hue_from = self.hsluv_hue_from.clamp(-4000, 4000);
+        self.hsluv_hue_to = self.hsluv_hue_to.clamp(-4000, 4000);
         self.hsluv_saturation = self.hsluv_saturation.clamp(0, 100);
         self.hsluv_lightness = self.hsluv_lightness.clamp(0, 100);
-        if !VALID_EFFECTS.contains(&self.visual_effect.as_str()) {
-            self.visual_effect = "bar1ch".to_string();
+        if !VALID_EFFECTS.contains(&self.visual_effect_name.as_str()) {
+            self.visual_effect_name = "bar1ch".to_string();
         }
     }
 

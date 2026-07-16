@@ -36,8 +36,8 @@ impl DecayProcessor {
             silence_factor: 0.75,
             exit_factor: 0.80,
             use_exit: false,
-            silence_threshold: 0.001,
-            min_value: 0.0001,
+            silence_threshold: 0.002,  // 对齐 C#（原 0.001）
+            min_value: 0.002,          // 对齐 C#（原 0.0001，差 20 倍）
             prev_left: Vec::new(),
             prev_right: Vec::new(),
             result_left: Vec::new(),
@@ -92,6 +92,7 @@ impl DecayProcessor {
     }
 
     /// 重置衰减状态（清空历史缓冲区）
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.prev_left.clear();
         self.prev_right.clear();

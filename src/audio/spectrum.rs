@@ -17,11 +17,12 @@ pub struct SpectrumData {
 
 impl SpectrumData {
     /// 频谱条数
+    #[allow(dead_code)]
     pub fn bar_count(&self) -> usize {
         self.left_channel.len()
     }
 
-    /// 是否静音
+    #[allow(dead_code)]
     pub fn is_silent(&self) -> bool {
         self.volume < 0.001
     }

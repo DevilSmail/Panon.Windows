@@ -1,5 +1,17 @@
 // presets.rs — 8 套预设配色方案（← C# ColorPresets）
-// 与 C# 版本数值对齐
+// P1 修复：数值完全对齐 C# SettingsPage.xaml.cs ColorPresets
+//
+// C# 预设 (HSLuv, HueFrom, HueTo, Saturation, Lightness):
+//   0: (false, 180,  720,  60, 50)  彩虹（默认）
+//   1: (true,  270, -270, 100, 50)  霓虹
+//   2: (true,  120,  300,  80, 65)  极光
+//   3: (false,  0,    60,  90, 55)  日落
+//   4: (false, 180,  240,  80, 50)  海洋
+//   5: (false,  0,    40, 100, 50)  火焰
+//   6: (false,  80,  160,  70, 45)  森林
+//   7: (true,  270,  330,  90, 55)  紫罗兰
+//
+// Rust 同时设置 HSL 和 HSLuv 两套值（与 C# 单套滑块行为对齐：切换色彩空间时值保持一致）
 
 /// 预设配色方案
 #[derive(Clone, Debug)]
@@ -17,118 +29,120 @@ pub struct ColorPreset {
     pub hsluv_lightness: i32,
 }
 
-/// 8 套内置预设配色
+/// 8 套内置预设配色（数值严格对齐 C#）
 pub static PRESETS: &[ColorPreset] = &[
-    // 0: 彩虹 — 完整色环循环
+    // 0: 彩虹 — HSL, 180→720, sat=60, light=50
     ColorPreset {
         use_hsluv: false,
         name: "彩虹",
-        hsl_hue_from: 0,
-        hsl_hue_to: 360,
-        hsl_saturation: 80,
+        hsl_hue_from: 180,
+        hsl_hue_to: 720,
+        hsl_saturation: 60,
         hsl_lightness: 50,
-        hsluv_hue_from: 0,
-        hsluv_hue_to: 360,
-        hsluv_saturation: 100,
+        hsluv_hue_from: 180,
+        hsluv_hue_to: 720,
+        hsluv_saturation: 60,
         hsluv_lightness: 50,
     },
-    // 1: 霓虹 — 高饱和度蓝→红循环
+    // 1: 霓虹 — HSLuv, 270→-270, sat=100, light=50
     ColorPreset {
         use_hsluv: true,
         name: "霓虹",
-        hsl_hue_from: 180,
-        hsl_hue_to: 720,
+        hsl_hue_from: 270,
+        hsl_hue_to: -270,
         hsl_saturation: 100,
-        hsl_lightness: 60,
+        hsl_lightness: 50,
         hsluv_hue_from: 270,
         hsluv_hue_to: -270,
         hsluv_saturation: 100,
-        hsluv_lightness: 60,
+        hsluv_lightness: 50,
     },
-    // 2: 极光 — 绿→蓝→紫
+    // 2: 极光 — HSLuv, 120→300, sat=80, light=65
     ColorPreset {
         use_hsluv: true,
         name: "极光",
         hsl_hue_from: 120,
         hsl_hue_to: 300,
-        hsl_saturation: 70,
-        hsl_lightness: 55,
+        hsl_saturation: 80,
+        hsl_lightness: 65,
         hsluv_hue_from: 120,
         hsluv_hue_to: 300,
         hsluv_saturation: 80,
-        hsluv_lightness: 55,
+        hsluv_lightness: 65,
     },
-    // 3: 日落 — 红→橙→黄
+    // 3: 日落 — HSL, 0→60, sat=90, light=55
     ColorPreset {
         use_hsluv: false,
         name: "日落",
-        hsl_hue_from: -20,
+        hsl_hue_from: 0,
         hsl_hue_to: 60,
-        hsl_saturation: 85,
-        hsl_lightness: 50,
-        hsluv_hue_from: -20,
+        hsl_saturation: 90,
+        hsl_lightness: 55,
+        hsluv_hue_from: 0,
         hsluv_hue_to: 60,
         hsluv_saturation: 90,
-        hsluv_lightness: 50,
+        hsluv_lightness: 55,
     },
-    // 4: 海洋 — 蓝→青→绿
+    // 4: 海洋 — HSL, 180→240, sat=80, light=50
     ColorPreset {
         use_hsluv: false,
         name: "海洋",
         hsl_hue_from: 180,
         hsl_hue_to: 240,
-        hsl_saturation: 75,
-        hsl_lightness: 45,
+        hsl_saturation: 80,
+        hsl_lightness: 50,
         hsluv_hue_from: 180,
         hsluv_hue_to: 240,
-        hsluv_saturation: 85,
-        hsluv_lightness: 45,
+        hsluv_saturation: 80,
+        hsluv_lightness: 50,
     },
-    // 5: 火焰 — 红→橙→黄
+    // 5: 火焰 — HSL, 0→40, sat=100, light=50
     ColorPreset {
         use_hsluv: false,
         name: "火焰",
         hsl_hue_from: 0,
-        hsl_hue_to: 50,
+        hsl_hue_to: 40,
         hsl_saturation: 100,
         hsl_lightness: 50,
         hsluv_hue_from: 0,
-        hsluv_hue_to: 50,
+        hsluv_hue_to: 40,
         hsluv_saturation: 100,
         hsluv_lightness: 50,
     },
-    // 6: 森林 — 绿→黄绿
+    // 6: 森林 — HSL, 80→160, sat=70, light=45
     ColorPreset {
         use_hsluv: false,
         name: "森林",
-        hsl_hue_from: 60,
-        hsl_hue_to: 140,
+        hsl_hue_from: 80,
+        hsl_hue_to: 160,
         hsl_saturation: 70,
-        hsl_lightness: 40,
-        hsluv_hue_from: 60,
-        hsluv_hue_to: 140,
-        hsluv_saturation: 80,
-        hsluv_lightness: 40,
+        hsl_lightness: 45,
+        hsluv_hue_from: 80,
+        hsluv_hue_to: 160,
+        hsluv_saturation: 70,
+        hsluv_lightness: 45,
     },
-    // 7: 紫罗兰 — 紫→粉
+    // 7: 紫罗兰 — HSLuv, 270→330, sat=90, light=55
     ColorPreset {
         use_hsluv: true,
         name: "紫罗兰",
-        hsl_hue_from: 240,
-        hsl_hue_to: 320,
-        hsl_saturation: 80,
-        hsl_lightness: 50,
-        hsluv_hue_from: 240,
-        hsluv_hue_to: 320,
+        hsl_hue_from: 270,
+        hsl_hue_to: 330,
+        hsl_saturation: 90,
+        hsl_lightness: 55,
+        hsluv_hue_from: 270,
+        hsluv_hue_to: 330,
         hsluv_saturation: 90,
-        hsluv_lightness: 50,
+        hsluv_lightness: 55,
     },
 ];
 
 /// 预设数量
+#[allow(dead_code)]
 pub const PRESET_COUNT: usize = 8;
 
 /// 获取预设名称列表
+#[allow(dead_code)]
 pub fn preset_names() -> Vec<&'static str> {
     PRESETS.iter().map(|p| p.name).collect()
 }

@@ -78,7 +78,7 @@ impl SpectrumRenderer {
             color_space_hsluv: false,
             hsl_hue_from: 180,
             hsl_hue_to: 720,
-            hsl_saturation: 80,
+            hsl_saturation: 60,
             hsl_lightness: 50,
             hsluv_hue_from: 270,
             hsluv_hue_to: -270,
@@ -86,7 +86,7 @@ impl SpectrumRenderer {
             hsluv_lightness: 50,
             bar_width: 6,
             gap_width: 3,
-            fill_mode: 0,
+            fill_mode: 1,
             free_regions: None,
             use_exit_factor: false,
             peak_heights: Vec::new(),
@@ -133,15 +133,18 @@ impl SpectrumRenderer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn max_peak_height(&self) -> f32 {
         self.peak_heights.iter().cloned().fold(0.0f32, f32::max)
     }
 
+    #[allow(dead_code)]
     pub fn cleanup(&mut self) {
         self.spectrogram_buf.clear();
     }
 
     /// 应用预设配色
+    #[allow(dead_code)]
     pub fn apply_preset(&mut self, preset: &crate::render::presets::ColorPreset) {
         self.hsl_hue_from = preset.hsl_hue_from;
         self.hsl_hue_to = preset.hsl_hue_to;

@@ -33,10 +33,8 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
 ] }
 
-# 设置窗口 GUI（阶段 7 起使用）
-# eframe 已内含 egui/egui-winit/egui-wgpu，统一由 eframe 管理版本
-eframe = "0.29"
-wgpu = { version = "22", features = ["angle"] }
+# 设置窗口 GUI（slint 声明式 UI）
+slint = "1.17"
 
 # JSON 配置
 serde = { version = "1", features = ["derive"] }
@@ -45,16 +43,14 @@ serde_json = "1"
 # 配置目录解析
 dirs = "5"
 
-# 日志
-log = "0.4"
-log4rs = "1.3"
-
 # 时间（panic hook 时间戳）
 chrono = "0.4"
 
-# ICO 图标解析（设置窗口图标）
-ico = "0.5"
+# 渲染输出导出用于阶段 B 算法/视觉对比
+png = "0.17"
 
 [build-dependencies]
 # 编译时嵌入图标资源
 embed-resource = "2.5"
+# slint UI 编译
+slint-build = "1.17"

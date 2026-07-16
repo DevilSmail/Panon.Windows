@@ -7,7 +7,8 @@ use std::ptr;
 
 use windows::core::{w, Error};
 use windows::Win32::Foundation::{
-    COLORREF, E_INVALIDARG, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
+    COLORREF, E_INVALIDARG, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT,
+    POINT, SIZE, WPARAM, GetLastError,
 };
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC,
@@ -17,10 +18,10 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, CreateWindowExW, DeferWindowPos, DefWindowProcW, DestroyWindow,
-    EndDeferWindowPos, HWND_TOPMOST, HMENU, PostQuitMessage, RegisterClassExW, ShowWindow,
+    EndDeferWindowPos, HWND_TOPMOST, HMENU, RegisterClassExW, SetWindowPos, ShowWindow,
     UpdateLayeredWindow, ULW_ALPHA, WM_DESTROY, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
 };
 
 use crate::render::renderer::SpectrumRenderer;
@@ -41,11 +42,20 @@ pub struct OverlayWindow {
 
 impl OverlayWindow {
     /// 创建分层覆盖窗口
-    pub fn create(taskbar: &TaskbarInfo) -> windows::core::Result<Self> {
+    pub fn create(taskbar: &TaskbarInfo, max_height: i32) -> windows::core::Result<Self> {
         let width = taskbar.width;
-        let height = taskbar.height;
+        let mut height = taskbar.height;
         if width <= 0 || height <= 0 {
             return Err(Error::new(E_INVALIDARG, "taskbar has invalid dimensions"));
+        }
+        if max_height > 0 {
+            let desired = max_height;
+            if desired < height {
+                height = desired;
+            }
+        }
+        if height <= 0 {
+            return Err(Error::new(E_INVALIDARG, "overlay has invalid height"));
         }
 
         unsafe {
@@ -61,7 +71,10 @@ impl OverlayWindow {
             };
             let atom = RegisterClassExW(&wc);
             if atom == 0 {
-                return Err(Error::from_win32());
+                let err = GetLastError();
+                if err != ERROR_CLASS_ALREADY_EXISTS {
+                    return Err(Error::from_win32());
+                }
             }
 
             // 创建分层窗口
@@ -69,13 +82,21 @@ impl OverlayWindow {
                 | WS_EX_NOACTIVATE;
             let style = WS_POPUP;
 
+            // 与 C# 对齐：overlayY = taskbarInfo.Y + (taskbarInfo.Height - _height)
+            // 适用于所有任务栏位置（底部/顶部/左侧/右侧）
+            let y = if max_height > 0 {
+                taskbar.y + (taskbar.height - height)
+            } else {
+                taskbar.y
+            };
+
             let hwnd = CreateWindowExW(
                 ex_style,
                 w!("Panon_Overlay_2024"),
                 w!("Panon Overlay"),
                 style,
                 taskbar.x,
-                taskbar.y,
+                y,
                 width,
                 height,
                 HWND::default(),
@@ -124,7 +145,7 @@ impl OverlayWindow {
             SelectObject(hdc_mem, h_bitmap);
 
             // 显示窗口
-            ShowWindow(hwnd, SW_SHOW);
+            let _ = ShowWindow(hwnd, SW_SHOW);
 
             Ok(Self {
                 hwnd,
@@ -147,12 +168,68 @@ impl OverlayWindow {
         self.renderer.free_regions = Some(regions);
     }
 
+    /// 调整覆盖窗口高度（重建 DIB Section + 重新定位，不销毁 HWND）
+    /// 由渲染线程调用（持有 overlay 锁），GDI 操作在渲染线程安全执行
+    pub unsafe fn set_max_height(&mut self, max_height: i32) {
+        let new_height = if max_height > 0 && max_height < self.taskbar.height {
+            max_height
+        } else {
+            self.taskbar.height
+        };
+
+        if new_height == self.height {
+            return;
+        }
+
+        // 1. 先创建新 DIB Section
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = self.width;
+        bmi.bmiHeader.biHeight = -new_height;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = 0;
+
+        let mut p_bits: *mut std::ffi::c_void = ptr::null_mut();
+        let new_bitmap = match CreateDIBSection(
+            self.hdc_screen, &bmi, DIB_RGB_COLORS, &mut p_bits, HANDLE::default(), 0,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // 2. SelectObject 新 bitmap → 自动 deselect 旧 bitmap
+        let old_bitmap = SelectObject(self.hdc_mem, new_bitmap);
+
+        // 3. 安全删除旧 bitmap（已不在 DC 中）
+        if !old_bitmap.is_invalid() {
+            let _ = DeleteObject(old_bitmap);
+        }
+
+        self.h_bitmap = new_bitmap;
+        self.p_bits = p_bits as *mut u32;
+        self.height = new_height;
+
+        // 4. 重新定位窗口
+        let new_y = self.taskbar.y + (self.taskbar.height - new_height);
+        let _ = SetWindowPos(
+            self.hwnd,
+            HWND_TOPMOST,
+            self.taskbar.x,
+            new_y,
+            self.width,
+            new_height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+
     /// 获取关联的任务栏信息
     pub fn taskbar(&self) -> &TaskbarInfo {
         &self.taskbar
     }
 
     /// 诊断：填充整个 overlay 为纯色（确认窗口位置和 UpdateLayeredWindow 正常）
+    #[allow(dead_code)]
     pub unsafe fn fill_solid(&mut self, r: u8, g: u8, b: u8) {
         if self.p_bits.is_null() {
             return;
@@ -230,6 +307,7 @@ impl OverlayWindow {
         let _ = EndDeferWindowPos(dwp);
     }
 
+    #[allow(dead_code)]
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -269,10 +347,7 @@ impl Drop for OverlayWindow {
 /// 默认窗口过程
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_DESTROY => {
-            PostQuitMessage(0);
-            LRESULT(0)
-        }
+        WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }

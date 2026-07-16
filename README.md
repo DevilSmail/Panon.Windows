@@ -4,8 +4,8 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 在 Windows 10/11 任务栏上显示实时音频频谱动画，支持 7 种视觉效果。
 
-> **当前状态：Rust 原生重构进行中**（从 C# / WinUI 3 迁移至 Rust + Win32 + egui）
-> 目标：单 exe ~5MB，内存基线 30~50MB，复制即运行，无需任何运行时。
+> **当前状态：Rust 原生版主体完成**（已从 C# / WinUI 3 完全迁移至 Rust + Win32 + Slint）
+> 单 exe ~9 MB，复制即运行，无需任何运行时。
 
 ---
 
@@ -22,7 +22,7 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 ## 功能特性
 
-- **实时音频频谱** — WASAPI Loopback 捕获系统音频输出
+- **实时音频频谱** — WASAPI Loopback 捕获系统音频输出（任何扬声器声音都会波动）
 - **7 种视觉效果** — 柱状图 / 波浪 / 实心单声道 / 实心立体声 / 光束 / 频谱瀑布 / 连线
 - **任务栏集成** — 频谱与任务栏重叠显示，支持"铺满任务栏"和"仅空白区域填充"两种模式
 - **多显示器** — 支持主显示器、指定显示器或所有显示器
@@ -39,13 +39,13 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 | 组件       | 技术                                       |
 | ---------- | ------------------------------------------ |
-| 语言       | Rust 1.85+ (stable)                        |
+| 语言       | Rust (stable)                              |
 | Win32 API  | `windows` crate（微软官方绑定）            |
 | 音频捕获   | WASAPI Loopback COM                        |
 | FFT        | 手写 Cooley-Tukey 2048 点                  |
 | 渲染       | 纯软件 DIB Section 像素缓冲区 (BGRA 32bpp) |
-| 设置窗口   | egui (即时模式 GUI)                        |
-| 任务栏检测 | Win32 SHAppBarMessage + UI Automation      |
+| 设置窗口   | Slint (声明式 UI)                          |
+| 任务栏检测 | Win32 SHAppBarMessage + UIA + HWND 回退    |
 | 设置存储   | JSON (`%APPDATA%/Panon/settings.json`)     |
 
 ---
@@ -54,12 +54,12 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 
 ### 便携版（普通用户）
 
-从 [Releases](https://github.com/DevilSmail/Panon.Windows/releases) 下载 `Panon.Windows_vX.X_portable.zip`，解压后双击 `panon.windows.exe` 即可运行。
+下载 `panon-windows.exe`，双击运行即可。首次启动自动在 `%APPDATA%\Panon\` 创建配置文件。
 
 **系统要求：**
 - Windows 10 version 1809+ 或 Windows 11
 - 无需管理员权限
-- 无需任何运行时（单 exe，静态链接 CRT）
+- 无需任何运行时（单 exe，静态链接）
 
 ### 开发编译（开发者）
 
@@ -68,14 +68,8 @@ Windows 任务栏音频频谱可视化器 —— 基于 [Panon](https://github.c
 ```powershell
 git clone https://github.com/DevilSmail/Panon.Windows.git
 cd Panon.Windows
-cargo run --release
-```
-
-**发布便携版：**
-```powershell
 cargo build --release
-# 产物 target/release/panon-windows.exe（约 5 MB）
-# 发布时重命名为 panon.windows.exe（对齐 C# 版命名）
+# 产物: target/release/panon-windows.exe
 ```
 
 ---
@@ -101,7 +95,7 @@ cargo build --release
 | -------- | --------------------------- | ------------------------------------ |
 | 渲染引擎 | OpenGL + GLSL               | 纯软件 CPU 渲染（直接写像素）        |
 | 音频捕获 | PyAudio / PulseAudio        | WASAPI Loopback                      |
-| 窗口系统 | KDE Plasmoid                | Win32 分层窗口 + egui 设置窗口       |
+| 窗口系统 | KDE Plasmoid                | Win32 分层窗口 + Slint 设置窗口      |
 | 着色器   | 原生 GLSL                   | CPU 模拟（已实现 7 种，原版共 12 种）|
 | 配置文件 | KConfig (~/.config/panonrc) | JSON (%APPDATA%/Panon/settings.json) |
 

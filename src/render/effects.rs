@@ -82,7 +82,7 @@ impl SpectrumRenderer {
 
     // ---- 区域辅助 ----
 
-    fn effective_regions(&self, width: i32) -> Option<Vec<(i32, i32)>> {
+    fn effective_regions(&self, _width: i32) -> Option<Vec<(i32, i32)>> {
         if self.fill_mode != 1 || self.free_regions.is_none() {
             return None;
         }
@@ -250,7 +250,7 @@ impl SpectrumRenderer {
                 }
 
                 // 峰值线
-                if self.gravity == 1 || self.gravity == 2 {
+                if self.gravity >= 1 {
                     let pd = if self.use_exit_factor {
                         EXIT_PEAK_DECAY_VALUE
                     } else {
@@ -267,11 +267,10 @@ impl SpectrumRenderer {
                             let ps = (ph as i32).max(0);
                             (ps, (ps + 2).min(height))
                         }
-                        2 => {
+                        _ => {
                             let pe = (height - ph as i32).min(height);
                             ((pe - 2).max(0), pe)
                         }
-                        _ => (0, 0),
                     };
                     if py_e > py_s && x_e > x_s {
                         let w = (x_e - x_s) as usize;
@@ -293,7 +292,7 @@ impl SpectrumRenderer {
     pub unsafe fn render_wave(
         &mut self,
         left: &[f32],
-        right: &[f32],
+        _right: &[f32],
         pixels: *mut u32,
         width: i32,
         height: i32,
@@ -438,7 +437,7 @@ impl SpectrumRenderer {
     pub unsafe fn render_oie1ch(
         &mut self,
         left: &[f32],
-        right: &[f32],
+        _right: &[f32],
         pixels: *mut u32,
         width: i32,
         height: i32,
