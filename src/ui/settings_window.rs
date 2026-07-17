@@ -406,10 +406,16 @@ pub fn run_settings_window(
         });
     }
 
-    // 定时检查托盘退出请求
+    // 定时检查托盘请求（设置窗口打开时主循环阻塞，通过轮询处理）
     window.on_check_actions(move || {
-        if crate::tray::icon::EXIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+        use std::sync::atomic::Ordering;
+        if crate::tray::icon::EXIT_REQUESTED.load(Ordering::SeqCst) {
             let _ = slint::quit_event_loop();
+        }
+        if crate::tray::icon::PENDING_PAUSE_TOGGLE.load(Ordering::SeqCst) {
+            crate::tray::icon::PENDING_PAUSE_TOGGLE.store(false, Ordering::SeqCst);
+            let was = crate::tray::icon::IS_PAUSED.load(Ordering::SeqCst);
+            crate::tray::icon::IS_PAUSED.store(!was, Ordering::SeqCst);
         }
     });
 

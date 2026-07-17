@@ -282,7 +282,7 @@ fn main() {
 
     let settings = Arc::new(Mutex::new(initial_settings));
     let settings_window_open = Arc::new(Mutex::new(false));
-    let paused = Arc::new(AtomicBool::new(false));
+    // 暂停状态使用 tray::icon::IS_PAUSED 统一管理（设置窗口阻塞时不经过 channel）
     let exiting = Arc::new(AtomicBool::new(false));
     // 最大高度变更通道：设置窗口写入 → 渲染线程读取并应用
     let pending_max_height: Arc<AtomicI32> = Arc::new(AtomicI32::new(-1));
@@ -314,7 +314,6 @@ fn main() {
     // 独立运行，设置窗口打开时频谱不中断，设置更改即时生效
     // ═══════════════════════════════════════════════════════════════
     let render_settings = settings.clone();
-    let render_paused = paused.clone();
     let render_exiting = exiting.clone();
     let idle_timeout = Duration::from_millis(200);
     let z_order_interval = Duration::from_secs(2);
@@ -376,7 +375,7 @@ fn main() {
                     }
                 }
 
-                if !render_paused.load(Ordering::SeqCst) {
+                if !tray::icon::IS_PAUSED.load(Ordering::SeqCst) {
                     while let Ok(samples) = sample_rx.try_recv() {
                         if !samples.is_empty() {
                             last_spectrum = fft.process(&samples, channels, sample_rate);
@@ -385,7 +384,7 @@ fn main() {
                     }
                 }
 
-                let spectrum = if render_paused.load(Ordering::SeqCst) {
+                let spectrum = if tray::icon::IS_PAUSED.load(Ordering::SeqCst) {
                     // 暂停：切换到空闲模式，保持上次频谱数据让 decay 自然衰减（对齐 C# 行为）
                     taskbar::uia::set_idle_mode(true);
                     // Feed silence: 清零通道数据 + volume，使 decay 使用 silence_factor (0.75)
@@ -466,11 +465,18 @@ fn main() {
             }
         }
 
+        // 检查托盘暂停请求（设置窗口打开时主循环阻塞，通过标志直达）
+        if tray::icon::PENDING_PAUSE_TOGGLE.load(Ordering::SeqCst) {
+            tray::icon::PENDING_PAUSE_TOGGLE.store(false, Ordering::SeqCst);
+            let was = tray::icon::IS_PAUSED.load(Ordering::SeqCst);
+            tray::icon::IS_PAUSED.store(!was, Ordering::SeqCst);
+            println!("[tray] {}", if was { "Resumed" } else { "Paused" });
+        }
+
         while let Ok(action) = action_rx.try_recv() {
             match action {
                 TrayAction::TogglePause => {
-                    let was = paused.load(Ordering::SeqCst);
-                    paused.store(!was, Ordering::SeqCst);
+                    let was = tray::icon::IS_PAUSED.load(Ordering::SeqCst);
                     tray::icon::IS_PAUSED.store(!was, Ordering::SeqCst);
                     println!("[tray] {}", if was { "Resumed" } else { "Paused" });
                 }

@@ -1,6 +1,8 @@
 // renderer.rs — CPU 频谱渲染器（← SpectrumRenderer.cs）
 // 封装像素缓冲区写入，分发到 7 种效果
 
+use crate::taskbar::detect::TaskbarPosition;
+
 /// 视觉效果枚举
 #[derive(Clone, Debug)]
 pub enum VisualEffect {
@@ -38,6 +40,9 @@ impl VisualEffect {
 pub struct SpectrumRenderer {
     pub visual_effect: VisualEffect,
     pub gravity: u8,
+    /// 任务栏位置，自动决定柱子生长方向
+    /// Bottom → 从下往上，Top → 从上往下，Left → 从左往右，Right → 从右往左
+    pub taskbar_position: TaskbarPosition,
     pub inversion: bool,
     pub color_space_hsluv: bool,
     pub hsl_hue_from: i32,
@@ -74,6 +79,7 @@ impl SpectrumRenderer {
         Self {
             visual_effect: VisualEffect::Bar1ch,
             gravity: 2,
+            taskbar_position: TaskbarPosition::Bottom,
             inversion: false,
             color_space_hsluv: false,
             hsl_hue_from: 180,
@@ -114,7 +120,6 @@ impl SpectrumRenderer {
             return;
         }
 
-        // 先清零（全透明），即使频谱为空也能正确显示透明窗口
         let total = (width * height) as usize;
         std::ptr::write_bytes(pixels as *mut u8, 0, total * 4);
 
@@ -122,14 +127,48 @@ impl SpectrumRenderer {
             return;
         }
 
-        match self.visual_effect {
-            VisualEffect::Bar1ch => self.render_bar1ch(left, right, pixels, width, height),
-            VisualEffect::Wave => self.render_wave(left, right, pixels, width, height),
-            VisualEffect::Solid1ch => self.render_solid1ch(left, right, pixels, width, height),
-            VisualEffect::Solid => self.render_solid(left, right, pixels, width, height),
-            VisualEffect::Beam => self.render_beam(left, right, pixels, width, height),
-            VisualEffect::Spectrogram => self.render_spectrogram(left, right, pixels, width, height),
-            VisualEffect::Oie1ch => self.render_oie1ch(left, right, pixels, width, height),
+        match self.taskbar_position {
+            TaskbarPosition::Top | TaskbarPosition::Bottom => {
+                // 水平任务栏：正常渲染，垂直柱子
+                match self.visual_effect {
+                    VisualEffect::Bar1ch => self.render_bar1ch(left, right, pixels, width, height),
+                    VisualEffect::Wave => self.render_wave(left, right, pixels, width, height),
+                    VisualEffect::Solid1ch => self.render_solid1ch(left, right, pixels, width, height),
+                    VisualEffect::Solid => self.render_solid(left, right, pixels, width, height),
+                    VisualEffect::Beam => self.render_beam(left, right, pixels, width, height),
+                    VisualEffect::Spectrogram => self.render_spectrogram(left, right, pixels, width, height),
+                    VisualEffect::Oie1ch => self.render_oie1ch(left, right, pixels, width, height),
+                }
+            }
+            TaskbarPosition::Left | TaskbarPosition::Right => {
+                // 垂直任务栏：渲染到交换宽高的临时缓冲区，再旋转 90° 写入目标
+                // 临时缓冲区：宽 = 任务栏高（频率轴），高 = 任务栏宽（柱子高度）
+                let temp_w = height;
+                let temp_h = width;
+                let mut temp = vec![0u32; (temp_w * temp_h) as usize];
+
+                match self.visual_effect {
+                    VisualEffect::Bar1ch => self.render_bar1ch(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Wave => self.render_wave(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Solid1ch => self.render_solid1ch(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Solid => self.render_solid(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Beam => self.render_beam(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Spectrogram => self.render_spectrogram(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                    VisualEffect::Oie1ch => self.render_oie1ch(left, right, temp.as_mut_ptr(), temp_w, temp_h),
+                }
+
+                // 旋转 90°：临时缓冲区的列 → 目标缓冲区的行
+                let is_right = matches!(self.taskbar_position, TaskbarPosition::Right);
+                for y in 0..height {
+                    for x in 0..width {
+                        let src_col = if is_right { temp_w - 1 - y } else { y };
+                        let src_idx = (x * temp_w + src_col) as usize;
+                        let dst_idx = (y * width + x) as usize;
+                        *pixels.add(dst_idx) = temp[src_idx];
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

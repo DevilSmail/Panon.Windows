@@ -6,6 +6,7 @@ pub mod menu;
 
 #[derive(Clone, Copy, Debug)]
 pub enum TrayAction {
+    #[allow(dead_code)]
     TogglePause,
     ShowSettings,
     Exit,

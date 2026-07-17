@@ -550,8 +550,8 @@ export component SettingsWindow inherits Window {
 
                 ComboRow {
                     title: "频谱方向";
-                    description: "控制频谱柱子的生长方向。任务栏在屏幕底部时默认靠下边缘向上。";
-                    model: ["居中 (从任务栏中线向上下扩展)", "靠任务栏上边缘向下", "靠任务栏下边缘向上 (默认)", "从右到左 (横向)", "从左到右 (横向)"];
+                    description: "控制频谱柱子的生长方向。方向自动根据任务栏位置适配（靠左时从左往右，靠右时从右往左）。此选项用于微调。";
+                    model: ["居中 (向两侧扩展)", "靠屏幕远边（任务栏在底部时靠上）", "靠任务栏边缘 (默认)"];
                     current-index <=> root.gravity;
                     selected(idx) => { root.save-requested(); }
                 }

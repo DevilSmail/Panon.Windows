@@ -155,7 +155,11 @@ impl OverlayWindow {
                 p_bits: p_bits as *mut u32,
                 width,
                 height,
-                renderer: SpectrumRenderer::new(),
+                renderer: {
+                    let mut r = SpectrumRenderer::new();
+                    r.taskbar_position = taskbar.position.clone();
+                    r
+                },
                 taskbar: taskbar.clone(),
             })
         }

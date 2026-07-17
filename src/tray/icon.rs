@@ -30,6 +30,9 @@ static TASKBAR_CREATED_MSG: Mutex<Option<u32>> = Mutex::new(None);
 pub static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// 全局暂停标志 — 供 WindowProc 读取当前暂停状态以切换菜单文字
 pub static IS_PAUSED: AtomicBool = AtomicBool::new(false);
+/// 暂停切换请求 — 设置窗口打开时主循环阻塞，wndproc 直接设置此标志
+/// 由 slint Timer (on_check_actions) 和主循环轮询处理
+pub static PENDING_PAUSE_TOGGLE: AtomicBool = AtomicBool::new(false);
 
 /// 托盘回调消息（WM_USER + 1）
 const WM_TRAY: u32 = WM_USER + 1;
@@ -174,16 +177,18 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             }
             WM_RBUTTONUP => {
                 let id = show_context_menu(hwnd, IS_PAUSED.load(Ordering::SeqCst));
-                let action = match id {
-                    MENU_ID_SETTINGS => TrayAction::ShowSettings,
-                    MENU_ID_PAUSE => TrayAction::TogglePause,
+                match id {
+                    MENU_ID_SETTINGS => send_action(TrayAction::ShowSettings),
+                    MENU_ID_PAUSE => {
+                        // 只设标志：设置窗口打开时 channel 主循环被阻塞，无法投递
+                        PENDING_PAUSE_TOGGLE.store(true, Ordering::SeqCst);
+                    }
                     MENU_ID_EXIT => {
-                    EXIT_REQUESTED.store(true, Ordering::SeqCst);
-                    TrayAction::Exit
-                }
-                    _ => return LRESULT(0),
+                        EXIT_REQUESTED.store(true, Ordering::SeqCst);
+                        send_action(TrayAction::Exit);
+                    }
+                    _ => {}
                 };
-                send_action(action);
                 return LRESULT(0);
             }
             _ => {}
