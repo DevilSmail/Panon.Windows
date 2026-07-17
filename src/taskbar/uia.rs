@@ -25,6 +25,8 @@ const HWND_TOLERANCE_PX: i32 = 6;
 /// 缓存有效期 500ms（正常）/ 3s（空闲模式）
 const REFRESH_INTERVAL_ACTIVE_MS: u128 = 500;
 const REFRESH_INTERVAL_IDLE_MS: u128 = 3000;
+/// HWND 回退刷新间隔（独立于 UIA，系统托盘变化需要及时响应）
+const HWND_REFRESH_INTERVAL_MS: u128 = 500;
 /// UIA 树递归最大深度
 const MAX_DEPTH: u32 = 10;
 const MAX_HWND_DEPTH: u32 = 8;
@@ -37,6 +39,7 @@ struct UiaState {
     taskbar_width: i32,
     taskbar_top: i32,
     last_refresh: Instant,
+    last_hwnd_refresh: Instant,
 
     cached_uia_rects: Vec<(i32, i32)>,
     cached_hwnd_rects: Vec<(i32, i32)>,
@@ -51,6 +54,9 @@ struct UiaState {
     good_confirm_count: u32,
     empty_confirm_count: u32,
 
+    // HWND flyout 防抖：flyout 期间元素被隐藏时不丢失缓存
+    last_good_hwnd_rects: Vec<(i32, i32)>,
+
     idle_mode: bool,
 }
 
@@ -59,10 +65,12 @@ impl UiaState {
         Self {
             hwnd: 0, taskbar_width: 0, taskbar_top: 0,
             last_refresh: Instant::now(),
+            last_hwnd_refresh: Instant::now(),
             cached_uia_rects: Vec::new(), cached_hwnd_rects: Vec::new(),
             cached_merged: None, cached_regions: Vec::new(), cached_min_bar_width: 0,
             stable_regions: None, stable_candidate: None, last_good_regions: None,
             good_confirm_count: 0, empty_confirm_count: 0,
+            last_good_hwnd_rects: Vec::new(),
             idle_mode: false,
         }
     }
@@ -114,13 +122,23 @@ pub fn get_free_regions(taskbar: &TaskbarInfo, min_bar_width: i32) -> Vec<(i32, 
         state.cached_regions = Vec::new();
     }
 
-    // HWND 回退：只在任务栏切换时刷新，不受 UIA 刷新周期影响
-    // flyout 期间 TrafficMonitor 窗口可能被隐藏，刷新会丢失缓存
-    let hwnd_stale = state.cached_hwnd_rects.is_empty() || state.hwnd != taskbar.hwnd
-        || state.taskbar_width != tw;
+    // HWND 回退：独立 500ms 定时刷新 + flyout 防抖
+    // 系统托盘图标变化频繁需要及时更新，但 flyout 期间元素可能被隐藏，若数量骤降则回退到上次正常值
+    let hwnd_stale = state.cached_hwnd_rects.is_empty()
+        || state.hwnd != taskbar.hwnd
+        || state.taskbar_width != tw
+        || state.last_hwnd_refresh.elapsed().as_millis() >= HWND_REFRESH_INTERVAL_MS;
     if hwnd_stale {
-        let hwnd_rects = collect_child_hwnd_rects(taskbar_hwnd, taskbar_rect);
-        state.cached_hwnd_rects = hwnd_rects;
+        let fresh = collect_child_hwnd_rects(taskbar_hwnd, taskbar_rect);
+        state.last_hwnd_refresh = Instant::now();
+
+        // 防抖：如果新扫描结果比上一次正常值少了超过一半，判定为 flyout 抖动，保留旧值
+        if fresh.len() * 2 < state.last_good_hwnd_rects.len() {
+            state.cached_hwnd_rects = state.last_good_hwnd_rects.clone();
+        } else {
+            state.cached_hwnd_rects = fresh.clone();
+            state.last_good_hwnd_rects = fresh;
+        }
     }
 
     // ── 计算 UIA-only 空白区域 ──
