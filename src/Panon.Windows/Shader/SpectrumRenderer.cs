@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Panon.Windows.Helpers;
 
 namespace Panon.Windows.Shader;
 
@@ -10,7 +11,12 @@ public sealed class SpectrumRenderer
 {
     private int _swWidth, _swHeight;
 
-    public int Gravity { get; set; } = 2;
+    /// <summary>任务栏位置，自动决定柱子生长方向。Bottom→从下往上，Top→从上往下，Left→从左往右，Right→从右往左</summary>
+    public TaskbarHelper.TaskbarPosition TaskbarPosition { get; set; } = TaskbarHelper.TaskbarPosition.Bottom;
+
+    /// <summary>用户设置的 gravity 原始值 (0-2)，实际渲染时结合 TaskbarPosition 推导方向</summary>
+    public int RawGravity { get; set; } = 2;
+    public int Gravity => RawGravity; // 保持兼容，实际方向由 TaskbarPosition 决定
     public bool Inversion { get; set; } = false;
     public bool ColorSpaceHSLuv { get; set; } = false;
     public int HslHueFrom { get; set; } = 180;
@@ -60,6 +66,37 @@ public sealed class SpectrumRenderer
         uint* pixels = (uint*)pBits;
         Unsafe.InitBlockUnaligned(pixels, 0, (uint)(width * height * 4));
 
+        bool isVertical = TaskbarPosition is TaskbarHelper.TaskbarPosition.Left or TaskbarHelper.TaskbarPosition.Right;
+        if (isVertical)
+        {
+            // 垂直任务栏：渲染到交换宽高的临时缓冲区，再旋转 90° 写入目标
+            int tempW = height;
+            int tempH = width;
+            var temp = new uint[tempW * tempH];
+            fixed (uint* pTemp = temp)
+            {
+                DispatchRender(left, right, pTemp, tempW, tempH);
+            }
+
+            // 旋转 90°：临时缓冲区的列 → 目标缓冲区的行
+            bool isRight = TaskbarPosition == TaskbarHelper.TaskbarPosition.Right;
+            for (int y = 0; y < height; y++)
+            {
+                int srcCol = isRight ? tempW - 1 - y : y;
+                for (int x = 0; x < width; x++)
+                {
+                    pixels[y * width + x] = temp[x * tempW + srcCol];
+                }
+            }
+        }
+        else
+        {
+            DispatchRender(left, right, pixels, width, height);
+        }
+    }
+
+    private unsafe void DispatchRender(float[] left, float[] right, uint* pixels, int width, int height)
+    {
         switch (VisualEffectName)
         {
             case "bar1ch":      RenderBar1ch(left, right, pixels, width, height); break;

@@ -11,7 +11,7 @@ public sealed class AppSettings
 
     // === General 设置 ===
     public int Fps { get; set; } = 30;
-    public int Gravity { get; set; } = 2; // 0=Center, 1=North(从上到下), 2=South(从下到上,默认), 3=East, 4=West
+    public int Gravity { get; set; } = 2; // 0=居中, 1=靠远边, 2=靠任务栏边缘(默认)。方向由任务栏位置自动推导
     public bool Inversion { get; set; } = false;
 
     // === Colors 设置 ===

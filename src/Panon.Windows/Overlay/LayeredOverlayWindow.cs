@@ -142,6 +142,7 @@ public sealed class LayeredOverlayWindow : IDisposable
         // 初始化纯软件渲染器
         _renderer = new SpectrumRenderer();
         _renderer.InitializeSoftware(_width, _height);
+        _renderer.TaskbarPosition = taskbarInfo?.Position ?? TaskbarHelper.TaskbarPosition.Bottom;
 
         // 订阅频谱数据
         App.Fft.SpectrumUpdated += OnSpectrumUpdated;
@@ -425,7 +426,7 @@ public sealed class LayeredOverlayWindow : IDisposable
         if (_renderer != null)
         {
             _renderer.VisualEffectName = settings.VisualEffectName;
-            _renderer.Gravity = settings.Gravity;
+            _renderer.RawGravity = settings.Gravity;
             _renderer.Inversion = settings.Inversion;
             _renderer.ColorSpaceHSLuv = settings.ColorSpaceHSLuv;
             _renderer.HslHueFrom = settings.HslHueFrom;
